@@ -18,6 +18,7 @@
     <div class="player-config expanded" id="p1Config">
       <div class="config-header" onclick="toggleCard('p1Config')">
         <h3>Player 1</h3>
+        <button id="p1BotToggle" class="bot-toggle" onclick="event.stopPropagation();toggleBot('p1')">🧑 Human</button>
         <span class="expand-arrow">▾</span>
       </div>
       <div class="config-body">
@@ -28,7 +29,7 @@
         </div>
         <div class="config-row">
           <label>Weapon</label>
-          <select id="p1Weapon" onchange="showDesc('p1','weapon',this.value)">
+          <select id="p1Weapon" onchange="showDesc('p1','weapon',this.value); if(this.value!=='random'){document.getElementById('p1Class').value='none';updateClassWeapon('p1');}">
             <option value="random">🎲 Random</option>
             <option value="sword">⚔️ Sword</option>
             <option value="hammer">🔨 Hammer</option>
@@ -78,7 +79,7 @@
         <div class="mode-card" data-mode="boss" onclick="selectMode('boss')">
           <div class="mode-icon">💀</div>
           <div class="mode-name">Boss Fight</div>
-          <div class="mode-desc">Battle the Creator</div>
+          <div class="mode-desc" id="bossModeDesc">Battle the Creator</div>
         </div>
         <div class="mode-card" data-mode="boss2p" onclick="selectMode('boss2p')">
           <div class="mode-icon">👥💀</div>
@@ -158,14 +159,24 @@
             <span>Landing Dust</span>
           </label>
         </div>
+        <!-- EXPERIMENTAL FEATURES -->
+        <div class="experimental-section">
+          <p class="exp-label">⚗ Experimental</p>
+          <div class="exp-row">
+            <input type="text" id="codeInput" class="code-input" placeholder="Enter code..."
+              onkeydown="if(event.key==='Enter') applyCode(this.value)">
+            <button class="btn exp-apply-btn" onclick="applyCode(document.getElementById('codeInput').value)">Apply</button>
+          </div>
+          <div id="codeMessage" class="code-message"></div>
+        </div>
       </div>
     </div>
 
     <button class="btn btn-start" onclick="startGame()">▶ START GAME</button>
 
     <div class="controls-info">
-      <div>🎮 <strong>P1:</strong> <strong>A/D</strong> move · <strong>W</strong> jump · <strong>hold A/D/W</strong> dash/boost · <strong>S</strong> shield · <strong>Space</strong> attack · <strong>Q</strong> ability · <strong>E</strong> super</div>
-      <div>🎮 <strong>P2:</strong> <strong>←/→</strong> move · <strong>↑</strong> jump · <strong>hold ←/→/↑</strong> dash/boost · <strong>↓</strong> shield · <strong>Enter</strong> attack · <strong>.</strong> ability · <strong>/</strong> super</div>
+      <div>🎮 <strong>P1:</strong> <strong>A/D</strong> move · <strong>W</strong> jump · <strong>double-tap A/D</strong> dash · <strong>hold W</strong> super-jump · <strong>S</strong> shield · <strong>Space</strong> attack · <strong>Q</strong> ability · <strong>E</strong> super</div>
+      <div>🎮 <strong>P2:</strong> <strong>←/→</strong> move · <strong>↑</strong> jump · <strong>double-tap ←/→</strong> dash · <strong>hold ↑</strong> super-jump · <strong>↓</strong> shield · <strong>Enter</strong> attack · <strong>.</strong> ability · <strong>/</strong> super</div>
       <div>⏸ <strong>Esc</strong> = pause &nbsp;|&nbsp; Double-tap jump for double jump &nbsp;|&nbsp; Shield has 30 s cooldown</div>
     </div>
   </div><!-- /.menu-center -->
@@ -175,6 +186,7 @@
     <div class="player-config expanded" id="p2Config">
       <div class="config-header" onclick="toggleCard('p2Config')">
         <h3 id="p2Title">Player 2</h3>
+        <button id="p2BotToggle" class="bot-toggle" onclick="event.stopPropagation();toggleBot('p2')">🧑 Human</button>
         <span class="expand-arrow">▾</span>
       </div>
       <div class="config-body">
@@ -185,7 +197,7 @@
         </div>
         <div class="config-row" id="p2WeaponRow">
           <label>Weapon</label>
-          <select id="p2Weapon" onchange="showDesc('p2','weapon',this.value)">
+          <select id="p2Weapon" onchange="showDesc('p2','weapon',this.value); if(this.value!=='random'){document.getElementById('p2Class').value='none';updateClassWeapon('p2');}">
             <option value="random">🎲 Random</option>
             <option value="sword">⚔️ Sword</option>
             <option value="hammer">🔨 Hammer</option>
@@ -240,6 +252,7 @@
     </div>
     <div class="health-bar-wrap">
       <div class="health-bar" id="p1Health"></div>
+      <span class="hp-text" id="p1HealthText">100</span>
     </div>
     <div class="super-bar-wrap">
       <span class="super-label">SUPER</span>
@@ -269,6 +282,7 @@
     </div>
     <div class="health-bar-wrap">
       <div class="health-bar" id="p2Health"></div>
+      <span class="hp-text" id="p2HealthText">100</span>
     </div>
     <div class="super-bar-wrap">
       <span class="super-label">SUPER</span>
@@ -334,7 +348,7 @@
     </div>
   </div>
 </div>
-
+<script src="https://cdn.jsdelivr.net/npm/matter-js@0.19.0/build/matter.min.js"></script>
 <script src="SMC.js"></script>
 </body>
 </html>
