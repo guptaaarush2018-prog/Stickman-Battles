@@ -62,6 +62,7 @@ let hitStopFrames = 0; // frames to freeze game for hit impact feel
 let _cheatBuffer = ''; // tracks recent keypresses for cheat codes
 let camXTarget = 450, camYTarget = 260, camXCur = 450, camYCur = 260;
 
+let lightningBolts   = [];    // { x, y, timer, segments } — Thor perk visual lightning
 let backstagePortals = [];    // {x,y,type,phase,timer,radius,maxRadius,codeChars,done}
 let bossDeathScene   = null;  // boss defeat animation state
 let fakeDeath       = { triggered: false, active: false, timer: 0, player: null };
@@ -98,6 +99,7 @@ let unlockedTrueBoss = !!localStorage.getItem('smc_trueform');
 
 // True Form boss global state
 let tfGravityInverted  = false;
+let tfGravityTimer     = 0;        // countdown (frames); 0 = gravity normal
 let tfControlsInverted = false;
 let tfFloorRemoved     = false;
 let tfFloorTimer       = 0;        // countdown (frames) until floor returns
@@ -822,6 +824,45 @@ function updateMapPerks() {
     }
   }
 
+  // ---- CITY: Moving cars that deal damage ----
+  if (currentArenaKey === 'city') {
+    if (!mapPerkState.cityCars)    mapPerkState.cityCars    = [];
+    if (mapPerkState.carSpawnCd === undefined) mapPerkState.carSpawnCd = 180;
+    mapPerkState.carSpawnCd--;
+    if (mapPerkState.carSpawnCd <= 0) {
+      mapPerkState.carSpawnCd = 240 + Math.floor(Math.random() * 240);
+      const goRight = Math.random() < 0.5;
+      mapPerkState.cityCars.push({
+        x:      goRight ? -80 : GAME_W + 80,
+        y:      438,            // floor level
+        w:      55, h: 22,
+        vx:     goRight ? 6.5 : -6.5,
+        color:  ['#cc2200','#0033cc','#448800','#cc8800'][Math.floor(Math.random() * 4)],
+        warned: false,
+      });
+      // Warn players with a HUD message
+      if (settings.dmgNumbers) damageTexts.push(new DamageText(GAME_W / 2, 105, 'CAR!', '#ffcc00'));
+    }
+    for (let ci = mapPerkState.cityCars.length - 1; ci >= 0; ci--) {
+      const car = mapPerkState.cityCars[ci];
+      car.x += car.vx;
+      // Remove when off-screen
+      if (car.x > GAME_W + 120 || car.x < -120) { mapPerkState.cityCars.splice(ci, 1); continue; }
+      // Damage players
+      for (const p of players) {
+        if (p.health <= 0 || p.invincible > 0 || p.isBoss) continue;
+        const carCX = car.x + car.w / 2;
+        const carCY = car.y - car.h / 2;
+        if (Math.abs(p.cx() - carCX) < car.w / 2 + p.w / 2 &&
+            Math.abs((p.y + p.h / 2) - carCY) < car.h / 2 + p.h / 2) {
+          dealDamage(null, p, 20, 28);
+          spawnParticles(p.cx(), p.cy(), '#ffcc00', 12);
+          if (settings.screenShake) screenShake = Math.max(screenShake, 12);
+        }
+      }
+    }
+  }
+
   // ---- ICE: Yeti rare encounter ----
   if (currentArenaKey === 'ice') {
     // Clean up dead yeti and start 20s respawn cooldown
@@ -1055,6 +1096,29 @@ function drawMapPerks() {
         ctx.globalAlpha = 0.2;
         ctx.beginPath(); ctx.arc(m.x, m.y - 38, 5, 0, Math.PI * 2); ctx.fill();
       }
+      ctx.restore();
+    }
+  }
+
+  // ---- CITY: Draw cars ----
+  if (currentArenaKey === 'city' && mapPerkState.cityCars) {
+    for (const car of mapPerkState.cityCars) {
+      ctx.save();
+      const carTop = car.y - car.h;
+      // Car body
+      ctx.fillStyle = car.color;
+      ctx.fillRect(car.x, carTop, car.w, car.h);
+      // Windows
+      ctx.fillStyle = 'rgba(160,220,255,0.75)';
+      ctx.fillRect(car.x + 6, carTop + 3, 14, 9);
+      ctx.fillRect(car.x + car.w - 20, carTop + 3, 14, 9);
+      // Wheels
+      ctx.fillStyle = '#111';
+      ctx.beginPath(); ctx.arc(car.x + 12, car.y, 6, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(car.x + car.w - 12, car.y, 6, 0, Math.PI * 2); ctx.fill();
+      // Headlights
+      ctx.fillStyle = car.vx > 0 ? '#ffffaa' : 'rgba(255,60,60,0.9)';
+      ctx.beginPath(); ctx.arc(car.vx > 0 ? car.x + car.w : car.x, car.y - car.h / 2, 4, 0, Math.PI * 2); ctx.fill();
       ctx.restore();
     }
   }
@@ -1392,7 +1456,7 @@ function clamp(v, mn, mx){ return Math.max(mn, Math.min(mx, v)); }
 function dist(a, b)      { return Math.hypot(a.cx() - b.cx(), (a.y + a.h/2) - (b.y + b.h/2)); }
 
 function dealDamage(attacker, target, dmg, kbForce, stunMult = 1.0, isSplash = false) {
-  if (target.invincible > 0 || target.health <= 0) return;
+  if (!target || target.invincible > 0 || target.health <= 0) return;
   if (target.godmode) return; // godmode: no hitbox — all damage blocked
   let actualDmg = (attacker && attacker.dmgMult !== undefined) ? Math.max(1, Math.round(dmg * attacker.dmgMult)) : dmg;
   // Kratos rage bonus
@@ -1733,6 +1797,148 @@ class DamageText {
 }
 
 // ============================================================
+// DANGER HEATMAP — grid-based environmental hazard awareness
+// Rebuilt once per frame; bots sample it to steer away from danger.
+// ============================================================
+const HMAP_COLS = 45;   // GAME_W / 20 ≈ 45 columns
+const HMAP_ROWS = 26;   // GAME_H / 20 ≈ 26 rows
+const HMAP_CELL = 20;   // world-units per cell
+
+let _heatmap   = new Float32Array(HMAP_COLS * HMAP_ROWS);
+let _heatFrame = -1;    // last frameCount when heatmap was rebuilt
+
+/** Write danger value into one cell (takes the max of existing value). */
+function _heatSet(col, row, val) {
+  if (col < 0 || col >= HMAP_COLS || row < 0 || row >= HMAP_ROWS) return;
+  const idx = row * HMAP_COLS + col;
+  if (val > _heatmap[idx]) _heatmap[idx] = val;
+}
+
+/** Radial splat — write danger fading outward from world-point (wx, wy). */
+function _heatSplat(wx, wy, radiusPx, peakVal) {
+  const cr = Math.ceil(radiusPx / HMAP_CELL);
+  const cc = Math.floor(wx / HMAP_CELL);
+  const rc = Math.floor(wy / HMAP_CELL);
+  for (let dr = -cr; dr <= cr; dr++) {
+    for (let dc = -cr; dc <= cr; dc++) {
+      const worldDx = dc * HMAP_CELL;
+      const worldDy = dr * HMAP_CELL;
+      const worldD  = Math.hypot(worldDx, worldDy);
+      if (worldD <= radiusPx) {
+        _heatSet(cc + dc, rc + dr, peakVal * (1 - worldD / radiusPx));
+      }
+    }
+  }
+}
+
+/**
+ * Sample danger value [0–1] at a world-space position.
+ * Returns 0.95 for positions outside the game world.
+ */
+function heatAt(wx, wy) {
+  const col = Math.floor(wx / HMAP_CELL);
+  const row = Math.floor(wy / HMAP_CELL);
+  if (col < 0 || col >= HMAP_COLS || row < 0 || row >= HMAP_ROWS) return 0.95;
+  return _heatmap[row * HMAP_COLS + col];
+}
+
+/**
+ * Rebuild the heatmap from current arena hazards.
+ * Guard: no-op if already rebuilt this frame (safe to call from multiple bots).
+ */
+function updateHeatmap() {
+  if (_heatFrame === frameCount) return;
+  _heatFrame = frameCount;
+  _heatmap.fill(0);
+
+  const a = currentArena;
+  if (!a) return;
+
+  // --- Screen / map edges: high danger near left & right walls ---
+  for (let row = 0; row < HMAP_ROWS; row++) {
+    _heatSet(0, row, 0.80); _heatSet(1, row, 0.55); _heatSet(2, row, 0.30);
+    _heatSet(HMAP_COLS - 1, row, 0.80);
+    _heatSet(HMAP_COLS - 2, row, 0.55);
+    _heatSet(HMAP_COLS - 3, row, 0.30);
+  }
+
+  // --- Bottom of screen: approaching death boundary ---
+  const deathRow = Math.min(HMAP_ROWS - 1, Math.floor(((a.deathY || 640)) / HMAP_CELL));
+  for (let col = 0; col < HMAP_COLS; col++) {
+    for (let dr = 0; dr <= 5; dr++) {
+      const row = Math.max(0, deathRow - dr);
+      _heatSet(col, row, Math.min(0.95, 0.18 + dr * 0.16));
+    }
+  }
+
+  // --- Lava floor (lava arena) ---
+  if (a.hasLava && a.lavaY) {
+    const lavaRow = Math.floor(a.lavaY / HMAP_CELL);
+    for (let col = 0; col < HMAP_COLS; col++) {
+      _heatSet(col, lavaRow,     1.00);
+      _heatSet(col, lavaRow - 1, 0.88);
+      _heatSet(col, lavaRow - 2, 0.68);
+      _heatSet(col, lavaRow - 3, 0.44);
+      _heatSet(col, lavaRow - 4, 0.24);
+      _heatSet(col, lavaRow - 5, 0.10);
+    }
+  }
+
+  // --- Boss arena floor hazard (lava or void floor removal) ---
+  if (a.isBossArena) {
+    if (bossFloorState === 'hazard') {
+      const floorPl = a.platforms.find(p => p.isFloor);
+      if (floorPl && floorPl.isFloorDisabled) {
+        const floorRow = Math.floor(floorPl.y / HMAP_CELL);
+        for (let col = 0; col < HMAP_COLS; col++) {
+          _heatSet(col, floorRow,     1.00);
+          _heatSet(col, floorRow + 1, 0.90);
+          _heatSet(col, floorRow - 1, 0.72);
+          _heatSet(col, floorRow - 2, 0.46);
+          _heatSet(col, floorRow - 3, 0.22);
+        }
+      }
+    } else if (bossFloorState === 'warning') {
+      // Warning: lower danger but bots should start repositioning
+      const floorPl = a.platforms.find(p => p.isFloor);
+      if (floorPl) {
+        const floorRow = Math.floor(floorPl.y / HMAP_CELL);
+        for (let col = 0; col < HMAP_COLS; col++) {
+          _heatSet(col, floorRow, 0.38);
+          _heatSet(col, floorRow - 1, 0.20);
+        }
+      }
+    }
+  }
+
+  // --- Boss beams (warning = moderate, active = very high) ---
+  for (const beam of bossBeams) {
+    const bCol = Math.floor(beam.x / HMAP_CELL);
+    const val  = beam.phase === 'active' ? 1.00 : 0.50;
+    const spread = beam.phase === 'active' ? 2 : 1;
+    for (let row = 0; row < HMAP_ROWS; row++) {
+      for (let dc = -spread; dc <= spread; dc++) {
+        const falloff = 1 - Math.abs(dc) / (spread + 1);
+        _heatSet(bCol + dc, row, val * falloff);
+      }
+    }
+  }
+
+  // --- TrueForm black holes ---
+  for (const bh of tfBlackHoles) {
+    _heatSplat(bh.x, bh.y, bh.r * 2.8, 0.92);
+  }
+
+  // --- Active projectiles (radial danger bubble) ---
+  for (const pr of projectiles) {
+    _heatSplat(pr.x, pr.y, 44, 0.45);
+  }
+
+  // --- TrueForm gravity: entire arena is lower danger if inverted (bots ignore ceiling-fall risk) ---
+  // (no change needed — the bottom death row captures it)
+}
+
+// ============================================================
 // FIGHTER
 // ============================================================
 class Fighter {
@@ -2043,7 +2249,9 @@ class Fighter {
         const _t = this.target;
         for (let _i = 0; _i < 3; _i++) {
           setTimeout(() => {
-            if (!gameRunning || _t.health <= 0) return;
+            if (!gameRunning || !_t || _t.health <= 0) return;
+            // Spawn visible lightning bolt from sky to target
+            spawnLightningBolt(_t.cx(), _t.y);
             spawnParticles(_t.cx(), _t.cy(), '#ffff00', 22);
             spawnParticles(_t.cx(), _t.cy(), '#ffffff', 12);
             if (settings.screenShake) screenShake = Math.max(screenShake, 12);
@@ -2330,6 +2538,245 @@ class Fighter {
 
   // ---- AI ----
 
+  // ---- UTILITY AI HELPERS ----
+
+  /**
+   * Walk N steps forward (world-space) and sample the heatmap + check for cliffs.
+   * @param {number} dir      ±1 direction
+   * @param {number} steps    how many probe steps
+   * @param {number} stepDist world-units per step
+   * @returns {{ heat: number, cliff: boolean }}
+   */
+  raycastForward(dir, steps = 7, stepDist = 13) {
+    let maxHeat = 0;
+    let cliffAhead = false;
+    for (let i = 1; i <= steps; i++) {
+      const wx = this.cx() + dir * i * stepDist;
+      const wy = this.y + this.h * 0.5;
+      const h  = heatAt(wx, wy);
+      if (h > maxHeat) maxHeat = h;
+      // Check ground under foot for the first 3 steps (cliff detection)
+      if (i <= 3 && this.onGround) {
+        const footX = wx;
+        const footY = this.y + this.h + 10;
+        let groundFound = false;
+        for (const pl of currentArena.platforms) {
+          if (pl.isFloorDisabled) continue;
+          if (footX > pl.x && footX < pl.x + pl.w && footY >= pl.y && footY <= pl.y + 30) {
+            groundFound = true; break;
+          }
+        }
+        if (!groundFound) cliffAhead = true;
+      }
+    }
+    return { heat: maxHeat, cliff: cliffAhead };
+  }
+
+  /**
+   * Score each possible AI action [0–1+] based on current game state.
+   * Higher score = more desirable action.
+   * Difficulty weights bias the scores toward aggression or caution.
+   */
+  computeUtility(t) {
+    const hpPct    = this.health / this.maxHealth;
+    const selfHeat = heatAt(this.cx(), this.cy());
+    const d        = t ? Math.abs(t.cx() - this.cx()) : Infinity;
+    const dNorm    = Math.min(d / 500, 1);           // 0 = at target, 1 = far away
+    const tHpPct   = t ? t.health / t.maxHealth : 1;
+    const inRange  = t ? d < this.weapon.range + 25 : false;
+
+    // Difficulty: easy = cautious, hard = aggressive
+    const hazardW  = this.aiDiff === 'easy' ? 1.55 : this.aiDiff === 'medium' ? 1.00 : 0.58;
+    const aggrW    = this.aiDiff === 'easy' ? 0.48 : this.aiDiff === 'medium' ? 0.82 : 1.22;
+
+    const s = {};
+
+    // AVOID_HAZARD: proportional to heatmap value at self + low-HP fear bonus
+    s.avoid_hazard = selfHeat * hazardW * (1 + (1 - hpPct) * 0.45);
+
+    // RECOVER: high when falling off-screen (vy > 2, y past 60% of GAME_H)
+    s.recover = (!this.onGround && this.vy > 2 && this.y > GAME_H * 0.60) ? 0.96 : 0;
+
+    // RETREAT: low HP + enemy is close and healthy
+    s.retreat = (hpPct < 0.35 && d < 320)
+      ? (1 - hpPct) * 0.90 * hazardW * (1 - dNorm * 0.35)
+      : 0;
+
+    // ATTACK: in range, weapon ready, scales with aggression and target vulnerability
+    s.attack = (inRange && this.cooldown === 0)
+      ? (0.60 + (1 - dNorm) * 0.22 + (1 - tHpPct) * 0.12) * aggrW
+      : 0;
+
+    // USE_ABILITY: available + close enough
+    s.use_ability = (this.abilityCooldown === 0 && d < 280)
+      ? (0.68 + (1 - tHpPct) * 0.14) * aggrW
+      : 0;
+
+    // USE_SUPER: very high priority when ready and self not in severe danger
+    s.use_super = (this.superReady && selfHeat < 0.60) ? 0.90 * aggrW : 0;
+
+    // CHASE: baseline — close the gap
+    s.chase = (0.38 + dNorm * 0.20) * aggrW;
+
+    return s;
+  }
+
+  /**
+   * Execute the highest-scoring utility action.
+   * Handles movement, combat, dodging, and reaction lag.
+   * Called from updateAI() after special-case overrides.
+   */
+  executeUtilityAI(t) {
+    // Ensure heatmap is current (no-op if already done this frame)
+    updateHeatmap();
+
+    const scores = this.computeUtility(t);
+    // Pick the action with the highest score
+    const best = Object.keys(scores).reduce((a, b) => scores[a] >= scores[b] ? a : b);
+
+    const dx         = t ? t.cx() - this.cx() : 0;
+    const dir        = dx > 0 ? 1 : -1;
+    const d          = Math.abs(dx);
+    const spd        = this.aiDiff === 'easy' ? 2.6 : this.aiDiff === 'medium' ? 4.2 : 5.8;
+    const atkFreq    = this.aiDiff === 'easy' ? 0.04 : this.aiDiff === 'medium' ? 0.16 : 0.28;
+    const abiFreq    = this.aiDiff === 'easy' ? 0.004 : this.aiDiff === 'medium' ? 0.022 : 0.04;
+    const missChance = this.aiDiff === 'easy' ? 0.15 : this.aiDiff === 'medium' ? 0.08 : 0.03;
+
+    // Raycast: check heat and cliff directly ahead
+    const fwd      = this.raycastForward(dir);
+    const pathSafe = fwd.heat < 0.55 && !fwd.cliff;
+
+    // Screen-edge guard
+    const nearLeftEdge  = this.x < 100 && !this.isBoss;
+    const nearRightEdge = this.x + this.w > GAME_W - 100 && !this.isBoss;
+    const towardEdge    = (nearLeftEdge && dir < 0) || (nearRightEdge && dir > 0);
+
+    switch (best) {
+
+      // ---- AVOID_HAZARD: flee the most dangerous nearby direction ----
+      case 'avoid_hazard': {
+        const selfHeat = heatAt(this.cx(), this.cy());
+        // Compare danger 60px left vs right; flee toward the safer side
+        const heatL  = heatAt(this.cx() - 60, this.cy());
+        const heatR  = heatAt(this.cx() + 60, this.cy());
+        const fleeDir = heatL < heatR ? -1 : 1;
+        if (!this.isEdgeDanger(fleeDir)) {
+          this.vx = fleeDir * spd * 1.6;
+        } else {
+          this.vx = 0; // can't run — jump up instead
+        }
+        // Jump if heat is high enough
+        if (selfHeat > 0.65 && this.onGround) {
+          this.vy = -20;
+        } else if (selfHeat > 0.50 && this.canDoubleJump && this.vy > 0) {
+          this.vy = -16; this.canDoubleJump = false;
+        }
+        break;
+      }
+
+      // ---- RETREAT: back away; weak counter-attack when cornered ----
+      case 'retreat': {
+        const retDir  = -dir;
+        const retEdge = this.isEdgeDanger(retDir);
+        if (!retEdge && !towardEdge) {
+          this.vx = retDir * spd;
+        } else {
+          // Cornered — fight back rather than stepping off edge
+          if (this.cooldown === 0 && Math.random() < atkFreq) this.attack(t);
+          this.vx = 0;
+        }
+        if (this.onGround && !retEdge && Math.random() < 0.04) this.vy = -16;
+        // Chip damage while retreating (reduced freq)
+        if (d < this.weapon.range + 10 && this.cooldown === 0 && Math.random() < atkFreq * 0.45)
+          this.attack(t);
+        break;
+      }
+
+      // ---- RECOVER: steer toward nearest platform when falling ----
+      case 'recover': {
+        let nearX = GAME_W / 2, nearDist = Infinity;
+        for (const pl of currentArena.platforms) {
+          if (pl.isFloorDisabled) continue;
+          const pdx = Math.abs(pl.x + pl.w / 2 - this.cx());
+          if (pdx < nearDist) { nearDist = pdx; nearX = pl.x + pl.w / 2; }
+        }
+        this.vx = nearX > this.cx() ? spd * 1.8 : -spd * 1.8;
+        // Use double jump to reach safety if still falling
+        if (this.canDoubleJump && this.vy > 1) { this.vy = -15; this.canDoubleJump = false; }
+        break;
+      }
+
+      // ---- USE_SUPER: unleash super move ----
+      case 'use_super':
+        this.useSuper(t);
+        break;
+
+      // ---- USE_ABILITY: activate weapon ability; close range if needed ----
+      case 'use_ability':
+        this.ability(t);
+        if (d > this.weapon.range + 5 && pathSafe && !towardEdge)
+          this.vx = dir * spd;
+        break;
+
+      // ---- ATTACK: hold position and swing ----
+      case 'attack':
+        this.vx *= 0.72;
+        // Occasional missed swing (human-like imperfection)
+        if (Math.random() < missChance) this.facing = -this.facing;
+        if (this.cooldown === 0 && Math.random() < atkFreq) this.attack(t);
+        if (this.abilityCooldown === 0 && Math.random() < abiFreq) this.ability(t);
+        if (this.superReady && Math.random() < 0.12) this.useSuper(t);
+        // Small hop to reach target on a slightly higher level
+        if (this.onGround && t && t.y + t.h < this.y - 30 && !fwd.cliff && Math.random() < 0.02)
+          this.vy = -16;
+        break;
+
+      // ---- CHASE: close the distance (default) ----
+      case 'chase':
+      default:
+        if (pathSafe && !towardEdge) {
+          this.vx = dir * spd;
+        } else if (fwd.cliff || towardEdge) {
+          // Blocked by edge or cliff — stop, try jumping to a platform above
+          this.vx = 0;
+          if (this.onGround && this.platformAbove() && Math.random() < 0.05) this.vy = -18;
+        }
+        // Jump to target on higher platform
+        if (this.onGround && t && t.y + t.h < this.y - 50 && !fwd.cliff && Math.random() < 0.04 &&
+            (!currentArena.hasLava || this.platformAbove()))
+          this.vy = -18;
+        // Jump toward airborne target (not if near screen edge)
+        if (this.onGround && t && !t.onGround && Math.random() < 0.05 && !fwd.cliff && !towardEdge)
+          this.vy = -18;
+        break;
+    }
+
+    // --- Shield reaction (medium+): block incoming melee swing ---
+    if (t && this.aiDiff !== 'easy' && t.attackTimer > 0 && d < 110 &&
+        this.shieldCooldown === 0 && Math.random() < 0.22) {
+      this.shielding = true;
+      this.shieldCooldown = SHIELD_CD;
+      setTimeout(() => { this.shielding = false; }, 320);
+    }
+
+    // --- Dodge projectiles (medium+) ---
+    if (this.aiDiff !== 'easy') {
+      for (const pr of projectiles) {
+        if (pr.owner === this) continue;
+        const pd = Math.hypot(pr.x - this.cx(), pr.y - this.cy());
+        if (pd < 130 && !this.isEdgeDanger(pr.vx > 0 ? -1 : 1) && Math.random() < 0.30) {
+          if (this.onGround) this.vy = -17;
+          else if (this.canDoubleJump) { this.vy = -13; this.canDoubleJump = false; }
+        }
+      }
+    }
+
+    // --- Reaction lag: human-like pause between decisions ---
+    if (this.aiDiff === 'easy'   && Math.random() < 0.10) this.aiReact = 8  + Math.floor(Math.random() * 6);
+    if (this.aiDiff === 'medium' && Math.random() < 0.04) this.aiReact = 4  + Math.floor(Math.random() * 5);
+    if (this.aiDiff === 'hard'   && Math.random() < 0.02) this.aiReact = 2  + Math.floor(Math.random() * 3);
+  }
+
   // Returns true if moving in 'dir' (±1) would walk the AI off a platform
   // with no safe ground beneath within the next 40px.
   isEdgeDanger(dir) {
@@ -2409,15 +2856,15 @@ class Fighter {
         return; // never leave zone logic — skip all other AI this frame
       }
       // Inside zone: attack any enemy also in zone, otherwise hold ground
-      if (enemyInZone && t && t.cx() > zoneLeft && t.cx() < zoneRight) {
-        const zd = Math.abs(t.cx() - this.cx());
+      if (enemyInZone && this.target && this.target.cx() > zoneLeft && this.target.cx() < zoneRight) {
+        const zd = Math.abs(this.target.cx() - this.cx());
         if (zd < this.weapon.range + 20) {
           this.vx *= 0.72;
-          if (Math.random() < kothAtkFreq) this.attack(t);
-          if (Math.random() < kothAbiFreq) this.ability(t);
-          if (this.superReady && Math.random() < 0.12) this.useSuper(t);
+          if (Math.random() < kothAtkFreq) this.attack(this.target);
+          if (Math.random() < kothAbiFreq) this.ability(this.target);
+          if (this.superReady && Math.random() < 0.12) this.useSuper(this.target);
         } else {
-          this.vx = (t.cx() > this.cx() ? 1 : -1) * kothSpd;
+          this.vx = (this.target.cx() > this.cx() ? 1 : -1) * kothSpd;
         }
       } else {
         // No enemy in zone — hold center, small idle drift
@@ -2440,13 +2887,12 @@ class Fighter {
     }
 
     const t  = this.target;
+    if (!t) return;
     const dx = t.cx() - this.cx();
     const d  = Math.abs(dx);
     const dir = dx > 0 ? 1 : -1;
 
-    const spd     = this.aiDiff === 'easy' ? 2.6 : this.aiDiff === 'medium' ? 4.2 : 5.8;
-    const atkFreq = this.aiDiff === 'easy' ? 0.04 : this.aiDiff === 'medium' ? 0.16 : 0.28;
-    const abiFreq = this.aiDiff === 'easy' ? 0.004 : this.aiDiff === 'medium' ? 0.022 : 0.04;
+    const spd = this.aiDiff === 'easy' ? 2.6 : this.aiDiff === 'medium' ? 4.2 : 5.8;
 
     // ---- RUINS: prioritize artifacts unless player is very close ----
     if (currentArenaKey === 'ruins' && mapItems && mapItems.length > 0 && !this.isBoss) {
@@ -2520,102 +2966,12 @@ class Fighter {
       if (nearRightEdge && this.vx > 0) this.vx *= 0.6;
     }
 
-    // Use super immediately when health is critical and super is ready
+    // Emergency super: if critically low health and super is ready, fire immediately
     if (this.health < 40 && this.superReady) { this.useSuper(t); }
 
-    // Better platform recovery — steer toward nearest platform when falling off-screen
-    if (this.y > 350 && !this.onGround) {
-      let nearestX = GAME_W / 2;
-      let nearestDist = Infinity;
-      for (const pl of currentArena.platforms) {
-        if (pl.isFloorDisabled) continue;
-        const pdx = Math.abs(pl.x + pl.w / 2 - this.cx());
-        if (pdx < nearestDist) { nearestDist = pdx; nearestX = pl.x + pl.w / 2; }
-      }
-      this.vx = nearestX > this.cx() ? spd * 1.8 : -spd * 1.8;
-    }
-
-    // ---- STATE MACHINE ----
-    if (this.health < 30 && d > 100 && Math.random() < 0.012) this.aiState = 'evade';
-    else if (d < this.weapon.range + 20) this.aiState = 'attack';
-    else                                  this.aiState = 'chase';
-
-    // React to incoming attack (medium+): raise shield — respects cooldown
-    if (this.aiDiff !== 'easy' && t.attackTimer > 0 && d < 110 &&
-        this.shieldCooldown === 0 && Math.random() < 0.22) {
-      this.shielding = true;
-      this.shieldCooldown = SHIELD_CD;
-      setTimeout(() => { this.shielding = false; }, 320);
-    }
-
-    // ---- EDGE CHECK ----
-    const edgeDanger  = this.isEdgeDanger(dir);
-    // Safe to chase: no edge danger, OR bot is airborne but not near screen edge
-    const safeToChase = !edgeDanger || (!this.onGround && !nearLeftEdge && !nearRightEdge);
-
-    switch (this.aiState) {
-      case 'chase':
-        if (safeToChase) {
-          this.vx = dir * spd;
-        } else {
-          // At cliff edge — stop and try to reach target via a platform above
-          this.vx = 0;
-          if (this.onGround && this.platformAbove() && Math.random() < 0.05) this.vy = -18;
-        }
-        // Jump to chase target on a higher platform — extra conservative on lava
-        if (this.onGround && t.y + t.h < this.y - 50 && Math.random() < 0.04 &&
-            !edgeDanger && (!currentArena.hasLava || this.platformAbove()))
-          this.vy = -18;
-        // Jump to chase airborne target more often — only if not near screen edge
-        if (this.onGround && !t.onGround && Math.random() < 0.06 && !edgeDanger && !nearLeftEdge && !nearRightEdge)
-          this.vy = -18;
-        break;
-
-      case 'attack':
-        this.vx *= 0.72;
-        // 8% chance: bot faces wrong way briefly (missed swing)
-        if (Math.random() < 0.08) this.facing = -this.facing;
-        if (Math.random() < atkFreq) this.attack(t);
-        if (Math.random() < abiFreq) this.ability(t);
-        if (this.superReady && Math.random() < 0.12) this.useSuper(t);
-        // Small hop to stay on target's level
-        if (this.onGround && t.y + t.h < this.y - 30 && !edgeDanger && Math.random() < 0.02)
-          this.vy = -16;
-        break;
-
-      case 'evade': {
-        const evadeDir  = -dir;
-        const evadeEdge = this.isEdgeDanger(evadeDir);
-        if (!evadeEdge) {
-          this.vx = evadeDir * spd;
-        } else {
-          // Trapped — fight back instead of walking off
-          if (Math.random() < atkFreq * 0.8) this.attack(t);
-          this.vx = 0;
-        }
-        if (this.onGround && !evadeEdge && Math.random() < 0.03) this.vy = -18;
-        if (Math.random() < atkFreq * 0.35) this.attack(t);
-        break;
-      }
-    }
-
-    // Dodge bullets (medium+) — 1.3x jump
-    if (this.aiDiff !== 'easy') {
-      for (const pr of projectiles) {
-        if (pr.owner !== this) {
-          const pd = Math.hypot(pr.x - this.cx(), pr.y - this.cy());
-          if (pd < 130 && !this.isEdgeDanger(pr.vx > 0 ? -1 : 1) && Math.random() < 0.30) {
-            if (this.onGround) this.vy = -17;
-            else if (this.canDoubleJump) { this.vy = -13; this.canDoubleJump = false; }
-          }
-        }
-      }
-    }
-
-    // Reaction lag — more human-like with wider random range
-    if (this.aiDiff === 'easy'   && Math.random() < 0.10) this.aiReact = 8 + Math.floor(Math.random() * 6);  // 8-13
-    if (this.aiDiff === 'medium' && Math.random() < 0.04) this.aiReact = 4 + Math.floor(Math.random() * 5);  // 4-8
-    if (this.aiDiff === 'hard'   && Math.random() < 0.02) this.aiReact = 2 + Math.floor(Math.random() * 3);  // 2-4
+    // ---- UTILITY AI: score-based action selection + raycast hazard detection ----
+    // Replaces the old state machine; handles movement, combat, dodge, and reaction lag.
+    this.executeUtilityAI(t);
   }
 
   // ---- DRAW ----
@@ -4174,7 +4530,7 @@ class TrueForm extends Fighter {
     super(450, 350, '#000000', 'gauntlet', noCtrl, true, 'hard');
     // Override weapon to use a fist-style profile
     this.weapon = Object.assign({}, WEAPONS.gauntlet, {
-      name: 'Fists', damage: 20, range: 48, cooldown: 22, kb: 7,
+      name: 'Fists', damage: 20, range: 48, cooldown: 16, kb: 7,
       contactDmgMult: 0,
       ability() {}
     });
@@ -4318,7 +4674,7 @@ class TrueForm extends Fighter {
     if (nearRight && dir > 0) this.vx = -spd * 0.6;
 
     // --- Attack ---
-    const atkFreq = phase === 3 ? 0.060 : phase === 2 ? 0.042 : 0.028;
+    const atkFreq = phase === 3 ? 0.12 : phase === 2 ? 0.085 : 0.055;
     if (d < 70 && Math.random() < atkFreq && this.cooldown <= 0) {
       this.attack(t);
     }
@@ -4343,6 +4699,7 @@ class TrueForm extends Fighter {
     switch (move) {
       case 'gravity':
         tfGravityInverted = !tfGravityInverted;
+        tfGravityTimer    = tfGravityInverted ? 600 : 0; // 10s limit when inverted
         this._gravityCd = 720;
         showBossDialogue(tfGravityInverted ? 'Down is up now.' : 'Gravity returns.', 180);
         spawnParticles(this.cx(), this.cy(), '#ffffff', 22);
@@ -4559,9 +4916,10 @@ function spawnTFBlackHoles() {
     tfBlackHoles.push({
       x:        100 + Math.random() * (GAME_W - 200),
       y:        120 + Math.random() * 200,
-      r:        28,
+      r:        52,
       maxTimer: 360, // 6 seconds
       timer:    360,
+      spin:     Math.random() * Math.PI * 2,
     });
   }
 }
@@ -4598,25 +4956,48 @@ function drawTFBlackHoles() {
   for (const bh of tfBlackHoles) {
     ctx.save();
     const alpha = bh.timer < 60 ? bh.timer / 60 : 1;
-    // Outer pull ring
-    const outerR = bh.r + 18 + Math.sin(frameCount * 0.12) * 4;
-    const gOuter = ctx.createRadialGradient(bh.x, bh.y, bh.r, bh.x, bh.y, outerR);
-    gOuter.addColorStop(0, 'rgba(0,0,0,0)');
-    gOuter.addColorStop(1, `rgba(255,255,255,${0.08 * alpha})`);
-    ctx.fillStyle = gOuter;
-    ctx.beginPath(); ctx.arc(bh.x, bh.y, outerR, 0, Math.PI * 2); ctx.fill();
-    // Black hole core
+    bh.spin = (bh.spin || 0) + 0.025;
+
+    // Gravitational lensing glow (outermost)
+    const lensR = bh.r * 2.6;
+    const gLens = ctx.createRadialGradient(bh.x, bh.y, bh.r * 1.1, bh.x, bh.y, lensR);
+    gLens.addColorStop(0, `rgba(80,0,140,${0.22 * alpha})`);
+    gLens.addColorStop(0.5, `rgba(30,0,60,${0.12 * alpha})`);
+    gLens.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = gLens;
+    ctx.beginPath(); ctx.arc(bh.x, bh.y, lensR, 0, Math.PI * 2); ctx.fill();
+
+    // Accretion disk (ellipse, rotates)
+    ctx.save();
+    ctx.translate(bh.x, bh.y);
+    ctx.rotate(bh.spin);
+    ctx.scale(1, 0.28);
+    const diskInner = bh.r * 1.05, diskOuter = bh.r * 1.9;
+    const gDisk = ctx.createRadialGradient(0, 0, diskInner, 0, 0, diskOuter);
+    gDisk.addColorStop(0, `rgba(255,140,0,${0.85 * alpha})`);
+    gDisk.addColorStop(0.4, `rgba(255,60,0,${0.55 * alpha})`);
+    gDisk.addColorStop(0.75, `rgba(120,20,180,${0.3 * alpha})`);
+    gDisk.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = gDisk;
+    ctx.beginPath(); ctx.arc(0, 0, diskOuter, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+
+    // Photon ring (bright orange/white ring at event horizon)
+    ctx.save();
+    ctx.shadowColor = '#ff8800'; ctx.shadowBlur = 14;
+    ctx.strokeStyle = `rgba(255,180,60,${0.75 * alpha})`;
+    ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(bh.x, bh.y, bh.r * 1.08, 0, Math.PI * 2); ctx.stroke();
+    ctx.restore();
+
+    // Black hole core (perfectly dark)
     const g = ctx.createRadialGradient(bh.x, bh.y, 0, bh.x, bh.y, bh.r);
     g.addColorStop(0, `rgba(0,0,0,${alpha})`);
-    g.addColorStop(0.7, `rgba(10,10,10,${alpha})`);
-    g.addColorStop(1, `rgba(40,40,40,0)`);
+    g.addColorStop(0.85, `rgba(0,0,0,${alpha})`);
+    g.addColorStop(1, `rgba(0,0,0,0)`);
     ctx.fillStyle = g;
     ctx.beginPath(); ctx.arc(bh.x, bh.y, bh.r, 0, Math.PI * 2); ctx.fill();
-    // White outline
-    ctx.strokeStyle = `rgba(255,255,255,${0.6 * alpha})`;
-    ctx.lineWidth   = 1.2;
-    ctx.shadowColor = '#ffffff'; ctx.shadowBlur = 6;
-    ctx.beginPath(); ctx.arc(bh.x, bh.y, bh.r, 0, Math.PI * 2); ctx.stroke();
+
     ctx.restore();
   }
 }
@@ -4671,6 +5052,7 @@ function tfSetSize(fighter, scale) {
 
 function resetTFState() {
   tfGravityInverted  = false;
+  tfGravityTimer     = 0;
   tfControlsInverted = false;
   tfFloorRemoved     = false;
   tfFloorTimer       = 0;
@@ -4749,6 +5131,31 @@ function drawVoidArena() {
   }
   ctx.globalAlpha = 1;
   ctx.restore();
+
+  // When floor is removed: orange lava rises from below
+  if (tfFloorRemoved) {
+    const ly = 460;
+    const lg = ctx.createLinearGradient(0, ly, 0, GAME_H);
+    lg.addColorStop(0,   '#ff6600');
+    lg.addColorStop(0.3, '#cc2200');
+    lg.addColorStop(1,   '#880000');
+    ctx.fillStyle = lg;
+    ctx.beginPath();
+    ctx.moveTo(0, ly);
+    for (let x = 0; x <= GAME_W; x += 18) {
+      ctx.lineTo(x, ly + Math.sin(x * 0.055 + frameCount * 0.09) * 8);
+    }
+    ctx.lineTo(GAME_W, GAME_H);
+    ctx.lineTo(0, GAME_H);
+    ctx.closePath();
+    ctx.fill();
+    ctx.save();
+    ctx.shadowColor = '#ff4400';
+    ctx.shadowBlur  = 24;
+    ctx.fillStyle   = 'rgba(255,100,0,0.28)';
+    ctx.fillRect(0, ly - 12, GAME_W, 14);
+    ctx.restore();
+  }
 }
 
 function drawCreatorArena() {
@@ -5095,7 +5502,12 @@ function checkDeaths() {
               setTimeout(endGame, 900);
             }
           } else {
-            setTimeout(endGame, 900);
+            if (gameMode === 'trueform') {
+              showBossDialogue('You never stood a chance.', 220);
+              setTimeout(endGame, 1400);
+            } else {
+              setTimeout(endGame, 900);
+            }
           }
         }
       }
@@ -5753,6 +6165,52 @@ function drawSpartanRageEffects() {
 // ============================================================
 // CLASS VISUAL EFFECTS (Thor lightning arcs, Ninja shadow trail, etc.)
 // ============================================================
+function spawnLightningBolt(x, targetY) {
+  // Build a jagged segmented path from top of screen down to target
+  const segments = [];
+  let cx = x + (Math.random() - 0.5) * 60;
+  let cy = 0;
+  const steps = 10 + Math.floor(Math.random() * 6);
+  for (let i = 0; i <= steps; i++) {
+    segments.push({ x: cx, y: cy });
+    cy = targetY * (i / steps);
+    cx = x + (Math.random() - 0.5) * 40 * (1 - i / steps);
+  }
+  segments.push({ x, y: targetY });
+  lightningBolts.push({ x, y: targetY, timer: 18, segments });
+}
+
+function updateAndDrawLightningBolts() {
+  for (let i = lightningBolts.length - 1; i >= 0; i--) {
+    const bolt = lightningBolts[i];
+    bolt.timer--;
+    if (bolt.timer <= 0) { lightningBolts.splice(i, 1); continue; }
+    const alpha = bolt.timer / 18;
+    ctx.save();
+    ctx.strokeStyle = `rgba(255,255,120,${alpha})`;
+    ctx.lineWidth   = 2.5;
+    ctx.shadowColor = '#ffff00';
+    ctx.shadowBlur  = 12;
+    ctx.beginPath();
+    ctx.moveTo(bolt.segments[0].x, bolt.segments[0].y);
+    for (let j = 1; j < bolt.segments.length; j++) {
+      ctx.lineTo(bolt.segments[j].x, bolt.segments[j].y);
+    }
+    ctx.stroke();
+    // Inner bright core
+    ctx.strokeStyle = `rgba(255,255,255,${alpha * 0.8})`;
+    ctx.lineWidth   = 1;
+    ctx.shadowBlur  = 4;
+    ctx.beginPath();
+    ctx.moveTo(bolt.segments[0].x, bolt.segments[0].y);
+    for (let j = 1; j < bolt.segments.length; j++) {
+      ctx.lineTo(bolt.segments[j].x, bolt.segments[j].y);
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
 const classTrails = []; // {x, y, color, alpha, size, life}
 
 function drawClassEffects() {
@@ -6237,18 +6695,26 @@ function gameLoop() {
         minX = Math.min(minX, e.x); maxX = Math.max(maxX, e.x + e.w);
         minY = Math.min(minY, e.y); maxY = Math.max(maxY, e.y + e.h);
       }
-      const PAD = 150;
-      const boxW = Math.max(maxX - minX + PAD * 2, GAME_W * 0.35);
-      const boxH = Math.max(maxY - minY + PAD * 2, GAME_H * 0.35);
-      const zoomX = GAME_W / boxW;
-      const zoomY = GAME_H / boxH;
-      camZoomTarget = Math.min(zoomX, zoomY, 1.1); // allow slight zoom-in when close
-      camZoomTarget = Math.max(camZoomTarget, 0.45);
+      const PAD = 80;
+      // Only zoom out if players would go off-screen at zoom=1; otherwise lock at 1
+      const rawCX = (minX + maxX) / 2;
+      const rawCY = (minY + maxY) / 2;
+      // Check if the bounding box fits within the game world at zoom=1
+      const fitsX = (maxX - minX + PAD * 2) <= GAME_W;
+      const fitsY = (maxY - minY + PAD * 2) <= GAME_H;
+      if (fitsX && fitsY) {
+        camZoomTarget = 1; // players on-screen — no zoom change
+      } else {
+        const boxW = Math.max(maxX - minX + PAD * 2, GAME_W * 0.35);
+        const boxH = Math.max(maxY - minY + PAD * 2, GAME_H * 0.35);
+        const zoomX = GAME_W / boxW;
+        const zoomY = GAME_H / boxH;
+        camZoomTarget = Math.min(zoomX, zoomY, 1.0); // never zoom in, only out
+        camZoomTarget = Math.max(camZoomTarget, 0.45);
+      }
       // Fix: when zoomed out past 50%, half-view exceeds half game-world → just center
       const hVW = GAME_W / (2 * camZoomTarget);
       const hVH = GAME_H / (2 * camZoomTarget);
-      const rawCX = (minX + maxX) / 2;
-      const rawCY = (minY + maxY) / 2;
       camXTarget = hVW >= GAME_W / 2 ? GAME_W / 2 : clamp(rawCX, hVW, GAME_W - hVW);
       camYTarget = hVH >= GAME_H / 2 ? GAME_H / 2 : clamp(rawCY, hVH, GAME_H - hVH);
     } else {
@@ -6371,7 +6837,18 @@ function gameLoop() {
   // Minigame logic update
   if (gameMode === 'minigames') updateMinigame();
   // True Form special updates
-  if (gameMode === 'trueform') updateTFBlackHoles();
+  if (gameMode === 'trueform') {
+    updateTFBlackHoles();
+    // Gravity timer: auto-restore after 10 seconds
+    if (tfGravityInverted && tfGravityTimer > 0) {
+      tfGravityTimer--;
+      if (tfGravityTimer <= 0) {
+        tfGravityInverted = false;
+        showBossDialogue('Gravity returns.', 150);
+        spawnParticles(GAME_W / 2, GAME_H / 2, '#ffffff', 16);
+      }
+    }
+  }
 
   // Players
   players.forEach(p => { if (p.health > 0 || p.invincible > 0) p.update(); });
@@ -6379,6 +6856,7 @@ function gameLoop() {
   drawSpartanRageEffects();
   drawClassEffects();
   drawCurseAuras();
+  updateAndDrawLightningBolts();
   if (gameMode === 'trueform') drawTFBlackHoles();
   checkWeaponSparks();
 
@@ -6680,22 +7158,15 @@ const TUTORIAL_STEPS = [
     check: (f) => f.dblJumped,
   },
   {
-    id: 'dash',
-    title: 'Step 4 — Dash',
-    keys: 'Hold A / D  or  Hold W',
-    desc: ['Hold A or D to charge a horizontal dash.', 'Hold W to charge a vertical super-jump.', 'Release when charged to launch!'],
-    check: (f) => f.dashed,
-  },
-  {
     id: 'shield',
-    title: 'Step 5 — Shield',
+    title: 'Step 4 — Shield',
     keys: 'S  (hold)',
     desc: ['Hold S (or ↓) to raise your shield.', 'Blocks incoming attacks. 30-second cooldown.'],
     check: (f) => f.shielded,
   },
   {
     id: 'attack',
-    title: 'Step 6 — Attack',
+    title: 'Step 5 — Attack',
     keys: 'Space',
     desc: ['Press Space (or Enter) to attack!', 'A training dummy appeared — go hit it!'],
     check: (f) => f.attacked,
@@ -6708,14 +7179,26 @@ const TUTORIAL_STEPS = [
   },
   {
     id: 'ability',
-    title: 'Step 7 — Weapon Ability',
+    title: 'Step 6 — Weapon Ability',
     keys: 'Q',
-    desc: ['Every weapon has a special ability.', 'Press Q (or .) to activate yours!'],
+    desc: ['Every weapon has a special ability.', 'Press Q (or .) to activate yours on the dummy!'],
     check: (f) => f.abilityUsed,
+    onEnter: () => {
+      // Ensure dummy still exists and player has a target
+      if (players[0] && (!trainingDummies.length || trainingDummies.every(d => d.health <= 0))) {
+        const dummy = new Dummy(640, 300);
+        dummy.playerNum = 2; dummy.name = 'DUMMY';
+        trainingDummies.push(dummy);
+      }
+      if (players[0] && trainingDummies[0]) {
+        players[0].target = trainingDummies[0];
+        trainingDummies[0].target = players[0];
+      }
+    },
   },
   {
     id: 'super',
-    title: 'Step 8 — Super Move',
+    title: 'Step 7 — Super Move',
     keys: 'E',
     desc: ['Your super meter is fully charged!', 'Press E (or /) to unleash your super move!'],
     check: (f) => f.superUsed,
@@ -6741,12 +7224,28 @@ const TUTORIAL_STEPS = [
     autoAdvance: 320,
   },
   {
+    id: 'class_ability',
+    title: 'Class Perks',
+    keys: '',
+    desc: ['At low HP, your class activates a special perk.', 'Ninja vanishes, Berserker enters Blood Frenzy,', 'Archer backsteps — use your perk wisely!'],
+    check: null,
+    autoAdvance: 320,
+  },
+  {
     id: 'modes',
     title: 'Game Modes',
     keys: '',
     desc: ['1v1: Fight a friend or AI bot.', 'Boss Fight: Challenge the Creator.', 'Training: Practice freely with dummies.'],
     check: null,
     autoAdvance: 280,
+  },
+  {
+    id: 'lore',
+    title: 'A Word of Warning...',
+    keys: '',
+    desc: ['The one who trained you... is the Boss.', 'He built this arena. He knows every move.', 'Defeat him if you dare.'],
+    check: null,
+    autoAdvance: 360,
   },
   {
     id: 'done',
@@ -6813,8 +7312,8 @@ function drawTutorial() {
 
   ctx.save();
 
-  // Push panel below the HTML HUD bar (≈50 game-units from top keeps it clear)
-  const PX = 12, PY = 52;
+  // Push panel below the HTML HUD bar (≈88 game-units keeps it below HUD)
+  const PX = 12, PY = 88;
   const PW = GAME_W - 24;
   const keyH = step.keys ? 20 : 0;
   const PH   = 24 + keyH + step.desc.length * 16 + 18;
@@ -7298,6 +7797,7 @@ function _startGameCore() {
   trainingDummies    = [];
   bossDialogue       = { text: '', timer: 0 };
   backstagePortals   = [];
+  lightningBolts     = [];
   bossDeathScene     = null;
   fakeDeath          = { triggered: false, active: false, timer: 0, player: null };
   mapItems           = [];
@@ -7400,7 +7900,7 @@ function _startGameCore() {
     // Minigames: P1 always human; survival/koth both support optional P2
     p1.isAI = false;
     p1.lives = 10; // infinite — managed by mode
-    if (minigameType === 'koth' || (minigameType === 'survival' && !p2IsNone)) {
+    if (minigameType === 'koth' || minigameType === 'chaos' || (minigameType === 'survival' && !p2IsNone)) {
       const p2mg = new Fighter(720, 300, c2, w2,
         { left:'ArrowLeft', right:'ArrowRight', jump:'ArrowUp', attack:'Enter',
           shield:'ArrowDown', ability:'.', super:'/' }, p2IsBot, p2Diff);
@@ -7411,7 +7911,7 @@ function _startGameCore() {
       if (p2Skin !== 'default' && SKIN_COLORS[p2Skin]) p2mg.color = SKIN_COLORS[p2Skin];
       applyClass(p2mg, getClassChoice('p2Class'));
       players = [p1, p2mg];
-      if (minigameType === 'koth') { p1.target = p2mg; p2mg.target = p1; }
+      if (minigameType === 'koth' || minigameType === 'chaos') { p1.target = p2mg; p2mg.target = p1; }
       else { p1.target = null; p2mg.target = null; } // survival: both target enemies
     } else {
       // Survival solo
@@ -7738,6 +8238,16 @@ function updateMinigame() {
     // Keep enemy targets pointed at a living player
     const liveTargets = players.filter(p => !p.isBoss && p.health > 0);
     survivalEnemies.forEach((e, i) => { if (liveTargets.length) e.target = liveTargets[i % liveTargets.length]; });
+    // In team mode, bot players also need targets pointing at survival enemies
+    if (survivalTeamMode) {
+      const liveEnemies = survivalEnemies.filter(e => e.health > 0);
+      players.forEach(p => {
+        if (p.isAI && !p.isBoss && liveEnemies.length > 0) {
+          const nearest = liveEnemies.reduce((best, e) => dist(p, e) < dist(p, best) ? e : best);
+          p.target = nearest;
+        }
+      });
+    }
 
     // --- Competitive: check if only one human player remains ---
     if (survivalFriendlyFire) {
