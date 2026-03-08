@@ -32,16 +32,32 @@ body {
 }
 
 /* ============================================================
-   GAME WRAPPER — fullscreen container for HUD + canvas
+   FADE OVERLAY — full-screen black for game start transition
+   ============================================================ */
+#fadeOverlay {
+  position: fixed;
+  inset: 0;
+  background: #000;
+  z-index: 500;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.32s ease;
+}
+
+/* Stats log table styling */
+#statsLogContent table { width: 100%; border-collapse: collapse; }
+#statsLogContent th, #statsLogContent td { padding: 5px 10px; text-align: left; }
+#statsLogContent th { font-weight: 700; font-size: 0.78rem; letter-spacing: 1px; }
+#statsLogContent td { font-size: 0.76rem; color: rgba(221,228,255,0.85); }
+
+/* ============================================================
+   GAME WRAPPER — fullscreen container
    ============================================================ */
 #gameWrapper {
   position: fixed;
   inset: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  background: #000;
   z-index: 1;
+  background: transparent;
 }
 
 /* ============================================================
@@ -73,15 +89,16 @@ body {
   height: calc(100vh - 40px);
   display: flex;
   flex-direction: column;
-  background: #1a3548;
-  border: 1px solid #2a6080;
-  border-radius: 12px;
+  background: rgba(8, 12, 30, 0.92);
+  border: 1.5px solid rgba(255,255,255,0.10);
+  border-radius: 14px;
   padding: 8px;
+  backdrop-filter: blur(4px);
 }
 
 .menu-side.right {
-  background: #1a3548;
-  border-color: #2a6080;
+  background: rgba(8, 12, 30, 0.92);
+  border-color: rgba(255,255,255,0.10);
 }
 
 .menu-side .player-config {
@@ -126,9 +143,13 @@ body {
 }
 
 .game-subtitle {
-  color: var(--muted);
+  background: linear-gradient(90deg, #7c3aed, #00d4ff);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
   font-size: 0.85rem;
-  letter-spacing: 3px;
+  font-weight: 700;
+  letter-spacing: 4px;
   text-transform: uppercase;
   margin-top: -14px;
 }
@@ -138,7 +159,7 @@ body {
   font-size: 0.7rem;
   letter-spacing: 3px;
   text-transform: uppercase;
-  color: var(--muted);
+  color: rgba(180,200,255,0.75);
   margin-bottom: 8px;
 }
 
@@ -155,9 +176,9 @@ body {
 .mode-card {
   width: 148px;
   padding: 20px 12px 16px;
-  border: 2px solid var(--border);
+  border: 2px solid rgba(255,255,255,0.14);
   border-radius: var(--radius);
-  background: var(--bg2);
+  background: rgba(10,18,45,0.88);
   cursor: pointer;
   transition: all 0.2s ease;
   user-select: none;
@@ -177,25 +198,30 @@ body {
 /* Mode-specific active states */
 .mode-card[data-mode="2p"].active {
   border-color: #00d4ff;
-  background: rgba(0, 212, 255, 0.10);
-  box-shadow: 0 0 22px rgba(0, 212, 255, 0.30);
+  background: rgba(0,100,200,0.35);
+  box-shadow: 0 0 28px rgba(0,212,255,0.55);
 }
 .mode-card[data-mode="bot"].active {
   border-color: #ff8800;
-  background: rgba(255, 136, 0, 0.10);
-  box-shadow: 0 0 22px rgba(255, 136, 0, 0.30);
+  background: rgba(180,80,0,0.30);
+  box-shadow: 0 0 28px rgba(255,136,0,0.50);
 }
 .mode-card[data-mode="boss"].active {
   border-color: #cc00ee;
-  background: rgba(200, 0, 238, 0.10);
-  box-shadow: 0 0 22px rgba(200, 0, 238, 0.30);
+  background: rgba(120,0,180,0.30);
+  box-shadow: 0 0 28px rgba(200,0,238,0.55);
 }
 .mode-card[data-mode="training"].active {
   border-color: #00dd55;
-  background: rgba(0, 221, 85, 0.10);
-  box-shadow: 0 0 22px rgba(0, 221, 85, 0.30);
+  background: rgba(0,140,60,0.30);
+  box-shadow: 0 0 28px rgba(0,221,85,0.50);
 }
-.mode-card[data-mode="boss2p"].active { border-color: #ff88ff; background: rgba(255,136,255,0.12); }
+.mode-card[data-mode="minigames"].active {
+  border-color: #ff4488;
+  background: rgba(180,0,80,0.30);
+  box-shadow: 0 0 28px rgba(255,68,136,0.50);
+}
+.mode-card[data-mode="boss2p"].active { border-color: #ff88ff; background: #200028; box-shadow: 0 0 22px rgba(255,136,255,0.35); }
 
 .mode-icon { font-size: 2.1rem; margin-bottom: 8px; }
 .mode-name { font-weight: 800; font-size: 1rem; letter-spacing: 1px; margin-bottom: 4px; }
@@ -213,19 +239,20 @@ body {
 
 .arena-card {
   padding: 8px 16px;
-  border: 2px solid var(--border);
+  border: 2px solid rgba(255,255,255,0.12);
   border-radius: 20px;
-  background: var(--bg2);
+  background: rgba(255,140,0,0.10);
   cursor: pointer;
   font-size: 0.82rem;
-  font-weight: 600;
+  font-weight: 700;
   letter-spacing: 1px;
+  color: rgba(255,220,160,0.85);
   transition: all 0.18s ease;
   user-select: none;
 }
 
-.arena-card:hover { border-color: rgba(255,255,255,0.2); background: var(--bg3); }
-.arena-card.active { border-color: var(--gold); color: var(--gold); background: rgba(255,215,0,0.08); }
+.arena-card:hover { border-color: rgba(255,200,100,0.55); background: rgba(255,140,0,0.22); color: #ffdd88; }
+.arena-card.active { border-color: var(--gold); color: var(--gold); background: rgba(255,160,0,0.20); box-shadow: 0 0 14px rgba(255,180,0,0.45); }
 
 /* ============================================================
    PLAYER CONFIG
@@ -254,10 +281,10 @@ body {
   transition: border-color 0.2s ease;
 }
 
-#p1Config { border-color: rgba(0, 212, 255, 0.25); }
-#p2Config { border-color: rgba(255, 68, 85, 0.25); }
-#p1Config:hover { border-color: rgba(0, 212, 255, 0.5); }
-#p2Config:hover { border-color: rgba(255, 68, 85, 0.5); }
+#p1Config { border-color: rgba(0,180,255,0.55); background: rgba(0,40,90,0.85); box-shadow: 0 0 18px rgba(0,180,255,0.12); }
+#p2Config { border-color: rgba(255,60,70,0.55); background: rgba(90,10,10,0.85); box-shadow: 0 0 18px rgba(255,60,70,0.12); }
+#p1Config:hover { border-color: rgba(0,212,255,0.95); box-shadow: 0 0 28px rgba(0,212,255,0.28); }
+#p2Config:hover { border-color: rgba(255,68,85,0.95); box-shadow: 0 0 28px rgba(255,68,85,0.28); }
 
 .config-header {
   display: flex;
@@ -273,15 +300,15 @@ body {
 .bot-toggle {
   font-size: 0.72rem;
   padding: 3px 8px;
-  background: rgba(124,58,237,0.25);
-  border: 1px solid rgba(124,58,237,0.5);
+  background: rgba(124,58,237,0.45);
+  border: 1px solid rgba(124,58,237,0.7);
   border-radius: 6px;
   color: var(--text);
   cursor: pointer;
   transition: background 0.15s;
   white-space: nowrap;
 }
-.bot-toggle:hover { background: rgba(124,58,237,0.45); }
+.bot-toggle:hover { background: rgba(124,58,237,0.65); }
 
 .expand-arrow {
   font-size: 0.85rem;
@@ -294,7 +321,11 @@ body {
   flex-direction: column;
   gap: 10px;
   margin-top: 8px;
-  overflow: hidden;
+  overflow-y: auto;
+}
+
+.menu-side {
+  overflow-y: auto;
 }
 
 .player-config.expanded .config-body {
@@ -310,16 +341,16 @@ body {
 #p1Config h3 { color: var(--p1); }
 #p2Config h3 { color: var(--p2); }
 
-/* Light-blue highlight on config rows */
+/* Config row highlight */
 .player-config .config-row {
-  background: rgba(0, 180, 255, 0.07);
+  background: #2a0d0d;
   border-radius: 6px;
   padding: 5px 7px;
   margin: 0 -3px;
 }
 
 #p2Config .config-row {
-  background: rgba(255, 68, 85, 0.06);
+  background: #2a0d0d;
 }
 
 .controls-hint {
@@ -333,8 +364,8 @@ body {
    SELECTION DESCRIPTION PANEL
    ============================================================ */
 .selection-desc {
-  background: rgba(0, 150, 220, 0.10);
-  border: 1px solid rgba(0, 200, 255, 0.22);
+  background: #060d1f;
+  border: 1px solid #0a2a40;
   border-radius: 8px;
   padding: 9px 11px;
   font-size: 0.72rem;
@@ -353,7 +384,7 @@ body {
 }
 
 #p2Desc .desc-title { color: var(--p2); }
-#p2Desc { border-color: rgba(255, 68, 85, 0.22); background: rgba(255, 50, 70, 0.07); }
+#p2Desc { border-color: rgba(255, 68, 85, 0.38); background: rgba(255, 50, 70, 0.16); }
 
 .desc-what    { color: var(--text); }
 .desc-ability { color: #88aaff; display: block; margin-top: 3px; }
@@ -431,6 +462,13 @@ input[type="color"] {
   background: rgba(140, 0, 220, 0.5);
   border-color: rgba(200, 0, 255, 0.7);
   color: #fff;
+}
+
+.training-btn.training-active {
+  background: rgba(160, 0, 255, 0.55);
+  border-color: rgba(200, 80, 255, 0.9);
+  color: #fff;
+  box-shadow: 0 0 8px rgba(180, 0, 255, 0.5);
 }
 
 /* ============================================================
@@ -605,29 +643,35 @@ input[type="color"] {
 }
 
 /* ============================================================
-   CANVAS  (JS sets width/height CSS; internal res stays 900×520)
+   CANVAS — fills entire viewport, no aspect-ratio preservation
    ============================================================ */
 #gameCanvas {
   display: none;
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
   background: #000;
-  flex: 1;
-  width: 100%;
-  object-fit: contain;
+  z-index: 0;
 }
 
 /* ============================================================
-   HUD
+   HUD — overlaid on top of canvas
    ============================================================ */
 #hud {
   display: none;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 10;
   justify-content: space-between;
   align-items: flex-start;
   padding: 5px 12px 4px;
-  background: rgba(7,7,15,0.95);
+  background: rgba(7,7,15,0.88);
   border-bottom: 1px solid var(--border);
-  width: 100%;
-  flex-shrink: 0;
   gap: 8px;
+  pointer-events: none;
 }
 
 .hud-side {
@@ -774,6 +818,44 @@ input[type="color"] {
   min-width: 160px;
 }
 
+/* Skin swatches */
+.skin-swatch {
+  width: 18px; height: 18px;
+  border-radius: 50%;
+  border: 2px solid rgba(255,255,255,0.25);
+  cursor: pointer;
+  padding: 0;
+  transition: border-color 0.15s, transform 0.1s;
+}
+.skin-swatch.active {
+  border-color: #fff;
+  transform: scale(1.25);
+}
+.skin-swatch:hover { border-color: rgba(255,255,255,0.7); }
+
+/* Boss HP bar (2P boss mode) */
+.boss-bar-label {
+  font-size: 10px;
+  letter-spacing: 2px;
+  color: #cc00ee;
+  font-weight: bold;
+}
+.boss-bar-track {
+  width: 140px;
+  height: 8px;
+  background: #1a001a;
+  border: 1px solid #660088;
+  border-radius: 4px;
+  overflow: hidden;
+}
+#bossHpFill {
+  height: 100%;
+  width: 100%;
+  background: linear-gradient(90deg, #880088, #cc00ee);
+  border-radius: 4px;
+  transition: width 0.1s ease;
+}
+
 #killFeed {
   display: flex;
   flex-direction: column;
@@ -861,5 +943,33 @@ input[type="color"] {
   #hud { flex-direction: column; align-items: stretch; }
   .hud-side.right { align-items: flex-start; }
   .hud-center { order: -1; }
-  canvas { width: 100% !important; height: auto !important; }
+  canvas { width: 100vw !important; height: 100vh !important; }
 }
+
+/* ============================================================
+   ACHIEVEMENT CARDS
+   ============================================================ */
+.ach-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 14px 10px;
+  border-radius: 10px;
+  text-align: center;
+  transition: transform 0.15s;
+}
+.ach-card:hover { transform: scale(1.04); }
+.ach-earned {
+  background: rgba(255, 200, 0, 0.12);
+  border: 1.5px solid rgba(255, 200, 0, 0.5);
+}
+.ach-locked {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1.5px solid rgba(255, 255, 255, 0.1);
+  opacity: 0.6;
+}
+.ach-icon  { font-size: 28px; line-height: 1; }
+.ach-title { font-size: 0.82rem; font-weight: 700; color: #ffcc00; }
+.ach-locked .ach-title { color: #888; }
+.ach-desc  { font-size: 0.70rem; color: #aaa; line-height: 1.3; }
