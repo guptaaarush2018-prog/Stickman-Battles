@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Stickman Clash</title>
+  <title>Stickman Battles</title>
   <link rel="stylesheet" href="SMC.css">
 </head>
 <body>
@@ -18,7 +18,7 @@
     <div class="player-config expanded" id="p1Config">
       <div class="config-header" onclick="toggleCard('p1Config')">
         <h3>Player 1</h3>
-        <button id="p1BotToggle" class="bot-toggle" onclick="event.stopPropagation();toggleBot('p1')">🧑 Human</button>
+        <button id="p1BotToggle" class="bot-toggle" onclick="event.stopPropagation();toggleBot('p1')">Human</button>
         <span class="expand-arrow">▾</span>
       </div>
       <div class="config-body">
@@ -27,26 +27,75 @@
           <label>Color</label>
           <input type="color" id="p1Color" value="#00d4ff">
         </div>
+        <div class="config-row" style="align-items:center; gap:6px;">
+          <label>Skin</label>
+          <div style="display:flex; gap:5px;">
+            <button class="skin-swatch active" data-pid="p1" data-skin="default" onclick="setSkin('p1','default',this)" style="background:#00d4ff" title="Default"></button>
+            <button class="skin-swatch" data-pid="p1" data-skin="fire"   onclick="setSkin('p1','fire',this)"   style="background:#ff4400" title="Fire"></button>
+            <button class="skin-swatch" data-pid="p1" data-skin="ice"    onclick="setSkin('p1','ice',this)"    style="background:#44aaff" title="Ice"></button>
+            <button class="skin-swatch" data-pid="p1" data-skin="shadow" onclick="setSkin('p1','shadow',this)" style="background:#222233" title="Shadow"></button>
+            <button class="skin-swatch" data-pid="p1" data-skin="gold"   onclick="setSkin('p1','gold',this)"   style="background:#cc8800" title="Gold"></button>
+          </div>
+        </div>
         <div class="config-row">
           <label>Weapon</label>
           <select id="p1Weapon" onchange="showDesc('p1','weapon',this.value); if(this.value!=='random'){document.getElementById('p1Class').value='none';updateClassWeapon('p1');}">
-            <option value="random">🎲 Random</option>
-            <option value="sword">⚔️ Sword</option>
-            <option value="hammer">🔨 Hammer</option>
-            <option value="gun">🔫 Gun</option>
-            <option value="axe">🪓 Axe</option>
-            <option value="spear">🗡️ Spear</option>
+            <option value="random">Random</option>
+            <option value="sword">Sword</option>
+            <option value="hammer">Hammer</option>
+            <option value="gun">Gun</option>
+            <option value="axe">Axe</option>
+            <option value="spear">Spear</option>
+            <option value="bow">Bow ⚔ Archer only</option>
+            <option value="shield">Shield ⚔ Paladin only</option>
+            <option value="scythe">Scythe</option>
+            <option value="fryingpan">Frying Pan</option>
+            <option value="broomstick">Broomstick</option>
+            <option value="boxinggloves">Boxing Gloves</option>
+            <option value="peashooter">Pea Shooter</option>
+            <option value="slingshot">Slingshot</option>
+            <option value="paperairplane">Paper Airplane</option>
           </select>
         </div>
         <div class="config-row" id="p1ClassRow">
           <label>Class</label>
-          <select id="p1Class" onchange="updateClassWeapon('p1')">
-            <option value="random">🎲 Random</option>
-            <option value="none">⚔️ None</option>
-            <option value="thor">⚡ Thor</option>
-            <option value="kratos">🪓 Kratos</option>
-            <option value="ninja">🗡️ Ninja</option>
-            <option value="gunner">🔫 Gunner</option>
+          <select id="p1Class" onchange="updateClassWeapon('p1'); showDesc('p1','class',this.value)">
+            <option value="random">Random</option>
+            <option value="none">None</option>
+            <option value="thor">Thor</option>
+            <option value="kratos">Kratos</option>
+            <option value="ninja">Ninja</option>
+            <option value="gunner">Gunner</option>
+            <option value="archer">Archer</option>
+            <option value="paladin">Paladin</option>
+            <option value="berserker">Berserker</option>
+          </select>
+        </div>
+        <div class="config-row">
+          <label>Hat</label>
+          <select id="p1Hat">
+            <option value="none">None</option>
+            <option value="cap">Cap</option>
+            <option value="crown">Crown</option>
+            <option value="wizard">Wizard</option>
+            <option value="headband">Headband</option>
+          </select>
+        </div>
+        <div class="config-row">
+          <label>Cape</label>
+          <select id="p1Cape">
+            <option value="none">None</option>
+            <option value="short">Short</option>
+            <option value="long">Long</option>
+            <option value="royal">Royal</option>
+          </select>
+        </div>
+        <div class="config-row" id="p1DifficultyRow" style="display:none">
+          <label>Difficulty</label>
+          <select id="p1Difficulty">
+            <option value="easy">Easy</option>
+            <option value="medium" selected>Medium</option>
+            <option value="hard">Hard</option>
           </select>
         </div>
         <div class="selection-desc" id="p1Desc" style="display:none">
@@ -59,7 +108,7 @@
 
   <!-- CENTER COLUMN: everything else -->
   <div class="menu-center">
-    <h1 class="game-title">STICKMAN CLASH</h1>
+    <h1 class="game-title">STICKMAN BATTLES</h1>
     <p class="game-subtitle">Local Multiplayer Platform Fighter</p>
 
     <!-- MODE SELECTION -->
@@ -67,29 +116,68 @@
       <p class="section-label">Game Mode</p>
       <div class="mode-cards">
         <div class="mode-card active" data-mode="2p" onclick="selectMode('2p')">
-          <div class="mode-icon">👥</div>
-          <div class="mode-name">2 Player</div>
-          <div class="mode-desc">Two humans, same keyboard</div>
-        </div>
-        <div class="mode-card" data-mode="bot" onclick="selectMode('bot')">
-          <div class="mode-icon">🤖</div>
-          <div class="mode-name">Vs Bot</div>
-          <div class="mode-desc">Fight an AI opponent</div>
+          <div class="mode-name">1v1</div>
+          <div class="mode-desc">Toggle bot on either player config</div>
         </div>
         <div class="mode-card" data-mode="boss" onclick="selectMode('boss')">
-          <div class="mode-icon">💀</div>
           <div class="mode-name">Boss Fight</div>
           <div class="mode-desc" id="bossModeDesc">Battle the Creator</div>
         </div>
-        <div class="mode-card" data-mode="boss2p" onclick="selectMode('boss2p')">
-          <div class="mode-icon">👥💀</div>
-          <div class="mode-name">2P Boss</div>
-          <div class="mode-desc">Co-op vs the Creator</div>
-        </div>
         <div class="mode-card" data-mode="training" onclick="selectMode('training')">
-          <div class="mode-icon">🎯</div>
           <div class="mode-name">Training</div>
           <div class="mode-desc">Practice with dummies</div>
+        </div>
+        <div class="mode-card" data-mode="minigames" onclick="selectMode('minigames')">
+          <div class="mode-name">Minigames</div>
+          <div class="mode-desc">Special game modes</div>
+        </div>
+        <div class="mode-card" id="modeTrueForm" data-mode="trueform" style="display:none" onclick="selectMode('trueform')">
+          <div class="mode-name" style="color:#ffffff">True Form</div>
+          <div class="mode-desc" style="color:#888">Face what lies beneath</div>
+        </div>
+      </div>
+      <!-- Boss player count toggle (shown when boss mode is selected) -->
+      <div id="bossPlayerToggle" style="display:none; gap:8px; margin-top:8px;">
+        <button id="bpBtn1" class="btn active" onclick="setBossPlayers(1)">1 Player</button>
+        <button id="bpBtn2" class="btn" onclick="setBossPlayers(2)">2 Players</button>
+      </div>
+      <!-- Minigame selection (shown when minigames mode is selected) -->
+      <div id="minigamePanel" style="display:none; margin-top:10px;">
+        <p class="section-label" style="margin-bottom:6px">Select Minigame</p>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
+          <div class="mode-card active" id="mgCardSurvival" onclick="selectMinigame('survival')" style="padding:8px 10px;font-size:0.82rem;">
+            <div class="mode-name" style="font-size:0.95rem">Survival</div>
+            <div class="mode-desc" style="font-size:0.72rem">Fight waves of enemies</div>
+          </div>
+          <div class="mode-card" id="mgCardKoth" onclick="selectMinigame('koth')" style="padding:8px 10px;font-size:0.82rem;">
+            <div class="mode-name" style="font-size:0.95rem">King of the Hill</div>
+            <div class="mode-desc" style="font-size:0.72rem">Hold the center zone</div>
+          </div>
+          <div class="mode-card" id="mgCardChaos" onclick="selectMinigame('chaos')" style="padding:8px 10px;font-size:0.82rem;">
+            <div class="mode-name" style="font-size:0.95rem">Chaos Match</div>
+            <div class="mode-desc" style="font-size:0.72rem">1v1 with wild modifiers</div>
+          </div>
+          <div class="mode-card" id="mgCardSoccer" onclick="selectMinigame('soccer')" style="padding:8px 10px;font-size:0.82rem;opacity:0.5;cursor:not-allowed;">
+            <div class="mode-name" style="font-size:0.95rem">Soccer Brawl</div>
+            <div class="mode-desc" style="font-size:0.72rem">Coming soon</div>
+          </div>
+        </div>
+        <!-- Survival sub-options (only shown when survival is selected) -->
+        <div id="survivalOptions" style="display:flex;flex-direction:column;gap:6px;margin-top:6px;padding:8px;background:rgba(255,255,255,0.05);border-radius:6px;border:1px solid rgba(255,255,255,0.1);">
+          <div style="display:flex;gap:6px;flex-wrap:wrap;">
+            <button id="survModeTeam" class="btn active" style="flex:1;font-size:0.73rem;padding:4px 8px;" onclick="setSurvivalMode(true)">🤝 Team</button>
+            <button id="survModeComp" class="btn" style="flex:1;font-size:0.73rem;padding:4px 8px;" onclick="setSurvivalMode(false)">⚔ Competitive</button>
+          </div>
+          <div id="survTeamOptions" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+            <span style="font-size:0.72rem;color:#aaa;">Waves:</span>
+            <button id="survWave10" class="btn active" style="font-size:0.70rem;padding:3px 8px;" onclick="setSurvivalGoal(10)">10</button>
+            <button id="survWave20" class="btn" style="font-size:0.70rem;padding:3px 8px;" onclick="setSurvivalGoal(20)">20</button>
+            <button id="survWave30" class="btn" style="font-size:0.70rem;padding:3px 8px;" onclick="setSurvivalGoal(30)">30</button>
+            <button id="survWaveInf" class="btn" style="font-size:0.70rem;padding:3px 8px;" onclick="setSurvivalGoal(0)">∞</button>
+          </div>
+          <div id="survCompOptions" style="display:none;font-size:0.72rem;color:#ffaaaa;">
+            ⚔ Friendly fire ON — last one standing wins!
+          </div>
         </div>
       </div>
     </div>
@@ -98,14 +186,14 @@
     <div id="arenaSection">
       <p class="section-label">Arena</p>
       <div class="arena-cards">
-        <div class="arena-card active" data-arena="grass"  onclick="selectArena('grass')">🌿 Grass</div>
-        <div class="arena-card"        data-arena="lava"   onclick="selectArena('lava')">🌋 Lava</div>
-        <div class="arena-card"        data-arena="space"  onclick="selectArena('space')">🌌 Space</div>
-        <div class="arena-card"        data-arena="city"   onclick="selectArena('city')">🏙 City</div>
-        <div class="arena-card"        data-arena="random" onclick="selectArena('random')">🎲 Random</div>
-        <div class="arena-card" data-arena="forest" onclick="selectArena('forest')">🌲 Forest</div>
-        <div class="arena-card" data-arena="ice"    onclick="selectArena('ice')">❄️ Ice</div>
-        <div class="arena-card" data-arena="ruins"  onclick="selectArena('ruins')">🏛 Ruins</div>
+        <div class="arena-card active" data-arena="grass"  onclick="selectArena('grass')">Grass</div>
+        <div class="arena-card"        data-arena="lava"   onclick="selectArena('lava')">Lava</div>
+        <div class="arena-card"        data-arena="space"  onclick="selectArena('space')">Space</div>
+        <div class="arena-card"        data-arena="city"   onclick="selectArena('city')">City</div>
+        <div class="arena-card"        data-arena="random" onclick="selectArena('random')">Random</div>
+        <div class="arena-card" data-arena="forest" onclick="selectArena('forest')">Forest</div>
+        <div class="arena-card" data-arena="ice"    onclick="selectArena('ice')">Ice</div>
+        <div class="arena-card" data-arena="ruins"  onclick="selectArena('ruins')">Ruins</div>
       </div>
     </div>
 
@@ -113,15 +201,15 @@
     <div id="trainingPanel" style="display:none">
       <p class="section-label">Training Tools</p>
       <div class="training-btns">
-        <button class="btn training-btn" onclick="trainingCmd('giveSuper')">⚡ Give Super</button>
-        <button class="btn training-btn" onclick="trainingCmd('noCooldowns')">🔄 No Cooldowns</button>
-        <button class="btn training-btn" onclick="trainingCmd('fullHealth')">❤ Full Health</button>
-        <button class="btn training-btn" onclick="trainingCmd('spawnDummy')">🎯 Spawn Dummy</button>
-        <button class="btn training-btn" onclick="trainingCmd('spawnBot')">🤖 Spawn Bot</button>
-        <button class="btn training-btn" onclick="trainingCmd('clearEnemies')">🗑 Clear All</button>
-        <button class="btn training-btn" onclick="trainingCmd('godmode')">🛡 Godmode</button>
-        <button class="btn training-btn" onclick="trainingCmd('spawnBoss')">💀 Spawn Boss</button>
-        <button class="btn training-btn" onclick="trainingCmd('onePunch')">👊 One Punch</button>
+        <button class="btn training-btn" onclick="trainingCmd('giveSuper')">Give Super</button>
+        <button class="btn training-btn" onclick="trainingCmd('noCooldowns')">No Cooldowns</button>
+        <button class="btn training-btn" onclick="trainingCmd('fullHealth')">Full Health</button>
+        <button class="btn training-btn" onclick="trainingCmd('spawnDummy')">Spawn Dummy</button>
+        <button class="btn training-btn" onclick="trainingCmd('spawnBot')">Spawn Bot</button>
+        <button class="btn training-btn" onclick="trainingCmd('clearEnemies')">Clear All</button>
+        <button class="btn training-btn" onclick="trainingCmd('godmode')">Godmode</button>
+        <button class="btn training-btn" onclick="trainingCmd('spawnBoss')">Spawn Boss</button>
+        <button class="btn training-btn" onclick="trainingCmd('onePunch')">One Punch</button>
       </div>
     </div>
 
@@ -139,7 +227,7 @@
 
     <!-- SETTINGS -->
     <div class="settings-section">
-      <button class="btn settings-toggle" onclick="toggleSettings()">⚙ Settings</button>
+      <button class="btn settings-toggle" onclick="toggleSettings()">Settings</button>
       <div id="settingsPanel" class="settings-panel">
         <div class="settings-grid">
           <label class="setting-item">
@@ -159,25 +247,65 @@
             <span>Landing Dust</span>
           </label>
         </div>
+        <!-- SOUND CONTROLS -->
+        <div style="margin-top:8px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+          <button id="sfxMuteBtn" class="btn settings-toggle" onclick="toggleSfxMute()" style="min-width:130px;">🔊 Sound: On</button>
+          <label style="font-size:0.78rem;color:#aaa;display:flex;align-items:center;gap:6px;">
+            Vol <input type="range" min="0" max="1" step="0.05" value="0.35" style="width:80px;accent-color:#8866ff;"
+              oninput="setSfxVolume(parseFloat(this.value))">
+          </label>
+        </div>
+        <!-- ADVANCED SETTINGS -->
+        <div style="margin-top:8px;">
+          <button class="btn settings-toggle" onclick="toggleAdvanced()">Advanced</button>
+          <div id="advancedPanel" class="settings-panel" style="display:none;margin-top:6px;">
+            <div class="settings-grid">
+              <label class="setting-item">
+                <input type="checkbox" id="settingBossAura" checked onchange="updateSettings()">
+                <span>Boss Aura</span>
+              </label>
+              <label class="setting-item">
+                <input type="checkbox" id="settingBotPortal" checked onchange="updateSettings()">
+                <span>Bot Portal FX</span>
+              </label>
+              <label class="setting-item">
+                <input type="checkbox" id="settingPhaseFlash" checked onchange="updateSettings()">
+                <span>Phase Flash</span>
+              </label>
+            </div>
+          </div>
+        </div>
+        <div id="resetConfirmRow" style="display:none; margin-top:8px; padding:8px; background:rgba(255,50,50,0.12); border-radius:6px; border:1px solid rgba(255,80,80,0.3);">
+          <span style="font-size:0.75rem;color:#ff8888;">Reset all progress (boss beaten, letters, true form)?</span>
+          <div style="display:flex;gap:6px;margin-top:6px;">
+            <button class="btn" onclick="confirmResetProgress()" style="background:rgba(200,0,0,0.7);font-size:0.72rem;padding:4px 12px;">Yes, Reset</button>
+            <button class="btn" onclick="document.getElementById('resetConfirmRow').style.display='none'" style="font-size:0.72rem;padding:4px 12px;">Cancel</button>
+          </div>
+        </div>
+        <!-- STATS LOG + ACHIEVEMENTS + RESET -->
+        <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap;">
+          <button class="btn settings-toggle" onclick="toggleStatsLog()">Stats Log</button>
+          <button class="btn settings-toggle" onclick="showAchievementsModal()" style="color:#ffcc00;border-color:rgba(255,200,0,0.4);">🏆 Achievements</button>
+          <button class="btn settings-toggle" onclick="document.getElementById('resetConfirmRow').style.display='block'" style="color:#ff8888;border-color:rgba(255,80,80,0.4);">Reset Progress</button>
+        </div>
         <!-- EXPERIMENTAL FEATURES -->
         <div class="experimental-section">
-          <p class="exp-label">⚗ Experimental</p>
+          <p class="exp-label">Experimental</p>
           <div class="exp-row">
-            <input type="text" id="codeInput" class="code-input" placeholder="Enter code..."
-              onkeydown="if(event.key==='Enter') applyCode(this.value)">
-            <button class="btn exp-apply-btn" onclick="applyCode(document.getElementById('codeInput').value)">Apply</button>
+            <input type="text" id="codeInput" class="code-input" placeholder="Beat the boss to unlock"
+              readonly style="cursor:default;opacity:0.75;">
           </div>
           <div id="codeMessage" class="code-message"></div>
         </div>
       </div>
     </div>
 
-    <button class="btn btn-start" onclick="startGame()">▶ START GAME</button>
+    <button class="btn btn-start" onclick="startGame()">START GAME</button>
 
     <div class="controls-info">
-      <div>🎮 <strong>P1:</strong> <strong>A/D</strong> move · <strong>W</strong> jump · <strong>double-tap A/D</strong> dash · <strong>hold W</strong> super-jump · <strong>S</strong> shield · <strong>Space</strong> attack · <strong>Q</strong> ability · <strong>E</strong> super</div>
-      <div>🎮 <strong>P2:</strong> <strong>←/→</strong> move · <strong>↑</strong> jump · <strong>double-tap ←/→</strong> dash · <strong>hold ↑</strong> super-jump · <strong>↓</strong> shield · <strong>Enter</strong> attack · <strong>.</strong> ability · <strong>/</strong> super</div>
-      <div>⏸ <strong>Esc</strong> = pause &nbsp;|&nbsp; Double-tap jump for double jump &nbsp;|&nbsp; Shield has 30 s cooldown</div>
+      <div><strong>P1:</strong> <strong>A/D</strong> move · <strong>W</strong> jump · <strong>double-tap A/D</strong> dash · <strong>hold W</strong> super-jump · <strong>S</strong> shield · <strong>Space</strong> attack · <strong>Q</strong> ability · <strong>E</strong> super</div>
+      <div><strong>P2:</strong> <strong>←/→</strong> move · <strong>↑</strong> jump · <strong>double-tap ←/→</strong> dash · <strong>hold ↑</strong> super-jump · <strong>↓</strong> shield · <strong>Enter</strong> attack · <strong>.</strong> ability · <strong>/</strong> super</div>
+      <div><strong>Esc</strong> = pause &nbsp;|&nbsp; Double-tap jump for double jump &nbsp;|&nbsp; Shield has 30 s cooldown</div>
     </div>
   </div><!-- /.menu-center -->
 
@@ -186,7 +314,7 @@
     <div class="player-config expanded" id="p2Config">
       <div class="config-header" onclick="toggleCard('p2Config')">
         <h3 id="p2Title">Player 2</h3>
-        <button id="p2BotToggle" class="bot-toggle" onclick="event.stopPropagation();toggleBot('p2')">🧑 Human</button>
+        <button id="p2BotToggle" class="bot-toggle" onclick="event.stopPropagation();toggleBot('p2')">Human</button>
         <span class="expand-arrow">▾</span>
       </div>
       <div class="config-body">
@@ -195,39 +323,84 @@
           <label>Color</label>
           <input type="color" id="p2Color" value="#ff4455">
         </div>
+        <div class="config-row" id="p2SkinRow" style="align-items:center; gap:6px;">
+          <label>Skin</label>
+          <div style="display:flex; gap:5px;">
+            <button class="skin-swatch active" data-pid="p2" data-skin="default" onclick="setSkin('p2','default',this)" style="background:#ff4455" title="Default"></button>
+            <button class="skin-swatch" data-pid="p2" data-skin="fire"   onclick="setSkin('p2','fire',this)"   style="background:#ff4400" title="Fire"></button>
+            <button class="skin-swatch" data-pid="p2" data-skin="ice"    onclick="setSkin('p2','ice',this)"    style="background:#44aaff" title="Ice"></button>
+            <button class="skin-swatch" data-pid="p2" data-skin="shadow" onclick="setSkin('p2','shadow',this)" style="background:#222233" title="Shadow"></button>
+            <button class="skin-swatch" data-pid="p2" data-skin="gold"   onclick="setSkin('p2','gold',this)"   style="background:#cc8800" title="Gold"></button>
+          </div>
+        </div>
         <div class="config-row" id="p2WeaponRow">
           <label>Weapon</label>
           <select id="p2Weapon" onchange="showDesc('p2','weapon',this.value); if(this.value!=='random'){document.getElementById('p2Class').value='none';updateClassWeapon('p2');}">
-            <option value="random">🎲 Random</option>
-            <option value="sword">⚔️ Sword</option>
-            <option value="hammer">🔨 Hammer</option>
-            <option value="gun">🔫 Gun</option>
-            <option value="axe">🪓 Axe</option>
-            <option value="spear">🗡️ Spear</option>
+            <option value="random">Random</option>
+            <option value="sword">Sword</option>
+            <option value="hammer">Hammer</option>
+            <option value="gun">Gun</option>
+            <option value="axe">Axe</option>
+            <option value="spear">Spear</option>
+            <option value="bow">Bow ⚔ Archer only</option>
+            <option value="shield">Shield ⚔ Paladin only</option>
+            <option value="scythe">Scythe</option>
+            <option value="fryingpan">Frying Pan</option>
+            <option value="broomstick">Broomstick</option>
+            <option value="boxinggloves">Boxing Gloves</option>
+            <option value="peashooter">Pea Shooter</option>
+            <option value="slingshot">Slingshot</option>
+            <option value="paperairplane">Paper Airplane</option>
           </select>
         </div>
         <div class="config-row" id="p2ClassRow">
           <label>Class</label>
           <select id="p2Class" onchange="updateClassWeapon('p2'); showDesc('p2','class',this.value)">
-            <option value="random">🎲 Random</option>
-            <option value="none">⚔️ None</option>
-            <option value="thor">⚡ Thor</option>
-            <option value="kratos">🪓 Kratos</option>
-            <option value="ninja">🗡️ Ninja</option>
-            <option value="gunner">🔫 Gunner</option>
+            <option value="random">Random</option>
+            <option value="none">None</option>
+            <option value="thor">Thor</option>
+            <option value="kratos">Kratos</option>
+            <option value="ninja">Ninja</option>
+            <option value="gunner">Gunner</option>
+            <option value="archer">Archer</option>
+            <option value="paladin">Paladin</option>
+            <option value="berserker">Berserker</option>
           </select>
         </div>
         <div class="selection-desc" id="p2Desc" style="display:none">
           <div class="desc-title" id="p2DescTitle"></div>
           <div class="desc-body"  id="p2DescBody"></div>
         </div>
-        <div class="config-row" id="difficultyRow" style="display:none">
-          <label>Difficulty</label>
-          <select id="difficulty">
-            <option value="easy">😌 Easy</option>
-            <option value="medium" selected>😐 Medium</option>
-            <option value="hard">😤 Hard</option>
+        <div class="config-row" id="p2HatRow">
+          <label>Hat</label>
+          <select id="p2Hat">
+            <option value="none">None</option>
+            <option value="cap">Cap</option>
+            <option value="crown">Crown</option>
+            <option value="wizard">Wizard</option>
+            <option value="headband">Headband</option>
           </select>
+        </div>
+        <div class="config-row" id="p2CapeRow">
+          <label>Cape</label>
+          <select id="p2Cape">
+            <option value="none">None</option>
+            <option value="short">Short</option>
+            <option value="long">Long</option>
+            <option value="royal">Royal</option>
+          </select>
+        </div>
+        <div class="config-row" id="p2DifficultyRow" style="display:none">
+          <label>Difficulty</label>
+          <select id="p2Difficulty">
+            <option value="easy">Easy</option>
+            <option value="medium" selected>Medium</option>
+            <option value="hard">Hard</option>
+          </select>
+        </div>
+        <div class="selection-desc" id="p2Desc" style="display:none">
+          <div class="desc-title" id="p2DescTitle"></div>
+          <div class="desc-body"  id="p2DescBody"></div>
         </div>
       </div>
     </div>
@@ -238,6 +411,17 @@
 <!-- ============================================================
      GAME WRAPPER — fullscreen container for HUD + canvas
      ============================================================ -->
+<div id="fadeOverlay"></div>
+
+<!-- Loading overlay shown during game start transition -->
+<div id="loadOverlay" style="display:none; position:fixed; inset:0; z-index:600; background:rgba(5,5,18,0.97); flex-direction:column; align-items:center; justify-content:center; gap:20px;">
+  <div style="font-size:1.8rem; font-weight:900; letter-spacing:8px; color:#fff; text-transform:uppercase; text-shadow:0 0 30px rgba(124,58,237,0.9);">LOADING</div>
+  <div style="width:280px; height:5px; background:rgba(255,255,255,0.12); border-radius:10px; overflow:hidden;">
+    <div id="loadBar" style="height:100%; width:0%; background:linear-gradient(90deg,#7c3aed,#00d4ff); border-radius:10px;"></div>
+  </div>
+  <div style="font-size:0.75rem; color:rgba(255,255,255,0.4); letter-spacing:3px;">STICKMAN BATTLES</div>
+</div>
+
 <div id="gameWrapper">
 
 <!-- ============================================================
@@ -266,12 +450,17 @@
       <span class="cd-label">S</span>
       <div class="cd-bar-track"><div class="cd-bar-fill" id="p1ShieldBar"></div></div>
     </div>
-    <div class="lives-display" id="p1Lives">❤❤❤</div>
+    <div class="lives-display" id="p1Lives">3</div>
   </div>
 
-  <!-- Center / kill feed -->
+  <!-- Center / kill feed + boss HP bar (2P boss mode) -->
   <div class="hud-center">
     <div id="killFeed"></div>
+    <div id="bossHpBar" style="display:none; flex-direction:column; align-items:center; gap:3px; margin-top:4px;">
+      <div class="boss-bar-label">CREATOR</div>
+      <div class="boss-bar-track"><div id="bossHpFill"></div></div>
+      <div id="bossHpText" style="font-size:11px; color:#cc00ee;">2000 / 2000</div>
+    </div>
   </div>
 
   <!-- Player 2 side -->
@@ -296,28 +485,55 @@
       <span class="cd-label">S</span>
       <div class="cd-bar-track"><div class="cd-bar-fill" id="p2ShieldBar"></div></div>
     </div>
-    <div class="lives-display" id="p2Lives">❤❤❤</div>
+    <div class="lives-display" id="p2Lives">3</div>
   </div>
 </div>
 
 <!-- ============================================================
      GAME CANVAS
      ============================================================ -->
-<canvas id="gameCanvas" width="900" height="520"></canvas>
+<canvas id="gameCanvas"></canvas>
 
 <!-- ============================================================
      IN-GAME TRAINING HUD (shown during training mode only)
      ============================================================ -->
-<div id="trainingHud" style="display:none; position:fixed; bottom:10px; left:50%; transform:translateX(-50%); z-index:50; flex-direction:row; gap:6px; background:rgba(0,0,0,0.75); padding:7px 12px; border-radius:10px; border:1px solid rgba(255,255,255,0.12);">
-  <button class="btn training-btn" onclick="trainingCmd('giveSuper')">⚡ Super</button>
-  <button class="btn training-btn" onclick="trainingCmd('noCooldowns')">🔄 CDs</button>
-  <button class="btn training-btn" onclick="trainingCmd('fullHealth')">❤ HP</button>
-  <button class="btn training-btn" onclick="trainingCmd('spawnDummy')">🎯 Dummy</button>
-  <button class="btn training-btn" onclick="trainingCmd('spawnBot')">🤖 Bot</button>
-  <button class="btn training-btn" onclick="trainingCmd('clearEnemies')">🗑 Clear</button>
-  <button class="btn training-btn" onclick="trainingCmd('godmode')">🛡 God</button>
-  <button class="btn training-btn" onclick="trainingCmd('spawnBoss')">💀 Boss</button>
-  <button class="btn training-btn" onclick="trainingCmd('onePunch')">👊 1-Punch</button>
+<div id="trainingHud" style="display:none; position:fixed; bottom:10px; left:50%; transform:translateX(-50%); z-index:50; flex-direction:column; align-items:center; gap:6px;">
+  <!-- Expanded command panel (shown when gear is open) -->
+  <div id="trainingExpandPanel" style="display:none; background:rgba(10,10,18,0.94); border:1px solid rgba(180,130,255,0.25); border-radius:12px; padding:12px 16px; min-width:300px; box-shadow:0 4px 24px rgba(0,0,0,0.7);">
+    <div style="font-size:0.68rem; color:#9966cc; text-transform:uppercase; letter-spacing:1.5px; margin-bottom:10px; font-weight:700;">Training Commands</div>
+    <!-- Player-only toggle -->
+    <div style="display:flex; align-items:center; gap:8px; margin-bottom:10px; padding-bottom:8px; border-bottom:1px solid rgba(255,255,255,0.08);">
+      <span style="font-size:0.75rem; color:#aaa; flex:1;">Commands apply to:</span>
+      <button id="tBtnPlayerOnly" class="btn training-btn training-active" onclick="trainingCmd('playerOnly')" style="font-size:0.72rem; padding:4px 10px;">Player Only</button>
+    </div>
+    <!-- Command grid -->
+    <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:5px;">
+      <button class="btn training-btn" onclick="trainingCmd('fullHealth')" title="Restore HP">Full HP</button>
+      <button class="btn training-btn" onclick="trainingCmd('giveSuper')" title="Fill super meter">Give Super</button>
+      <button id="tBtnCDs" class="btn training-btn" onclick="trainingCmd('noCooldowns')" title="Toggle no cooldowns">No CDs</button>
+      <button class="btn training-btn" onclick="trainingCmd('spawnDummy')" title="Spawn a training dummy">Dummy</button>
+      <button class="btn training-btn" onclick="trainingCmd('spawnBot')" title="Spawn an AI bot">Spawn Bot</button>
+      <button class="btn training-btn" onclick="trainingCmd('spawnBoss')" title="Spawn full boss">Spawn Boss</button>
+      <button class="btn training-btn" onclick="trainingCmd('spawnBeast')" title="Spawn a Forest Beast">Spawn Beast</button>
+      <button id="tBtnGod" class="btn training-btn" onclick="trainingCmd('godmode')" title="Toggle godmode — no hitbox">Godmode</button>
+      <button id="tBtnOnePunch" class="btn training-btn" onclick="trainingCmd('onePunch')" title="One-hit kills">1-Punch</button>
+      <button id="tBtnChaos" class="btn training-btn" onclick="trainingCmd('chaosMode')" title="All entities attack nearest">Chaos</button>
+      <button class="btn training-btn" onclick="trainingCmd('clearEnemies')" title="Remove all enemies" style="grid-column:1/-1; background:rgba(180,40,40,0.3);">Clear All Enemies</button>
+    </div>
+    <!-- Key reference -->
+    <div style="margin-top:10px; padding-top:8px; border-top:1px solid rgba(255,255,255,0.08); font-size:0.69rem; color:#777; line-height:1.7;">
+      <b style="color:#bbb;">God</b> — blocks all damage &nbsp;·&nbsp; <b style="color:#bbb;">Chaos</b> — every entity attacks nearest<br>
+      <b style="color:#bbb;">Boss</b> — full boss AI + beams + portals in current arena
+    </div>
+  </div>
+  <!-- Bottom bar: quick actions + gear toggle -->
+  <div style="display:flex; gap:6px; background:rgba(0,0,0,0.78); padding:7px 10px; border-radius:10px; border:1px solid rgba(255,255,255,0.12); align-items:center;">
+    <button class="btn training-btn" onclick="trainingCmd('fullHealth')" title="Full HP">HP</button>
+    <button class="btn training-btn" onclick="trainingCmd('giveSuper')" title="Give Super">Super</button>
+    <button class="btn training-btn" onclick="trainingCmd('clearEnemies')" title="Clear enemies">Clear</button>
+    <div style="width:1px; background:rgba(255,255,255,0.18); align-self:stretch; margin:0 2px;"></div>
+    <button class="btn training-btn" onclick="toggleTrainingPanel()" title="All commands" style="font-size:1rem; padding:4px 9px; letter-spacing:0;">⚙</button>
+  </div>
 </div>
 
 </div><!-- /#gameWrapper -->
@@ -329,8 +545,11 @@
   <div class="overlay-box">
     <h2>Paused</h2>
     <div class="btn-row">
-      <button class="btn btn-start" onclick="resumeGame()">▶ Resume</button>
-      <button class="btn" onclick="backToMenu()">⬅ Menu</button>
+      <button class="btn btn-start" onclick="resumeGame()">Resume</button>
+      <button class="btn" onclick="backToMenu()">Menu</button>
+    </div>
+    <div class="btn-row" style="margin-top:8px;">
+      <button class="btn" onclick="toggleStatsLog()" style="font-size:0.8rem;padding:6px 14px;">Stats Log</button>
     </div>
   </div>
 </div>
@@ -343,12 +562,51 @@
     <h2 id="winnerText">PLAYER 1 WINS!</h2>
     <div id="statsDisplay"></div>
     <div class="btn-row">
-      <button class="btn btn-start" onclick="startGame()">▶ Play Again</button>
-      <button class="btn" onclick="backToMenu()">⬅ Menu</button>
+      <button class="btn btn-start" onclick="startGame()">Play Again</button>
+      <button class="btn" onclick="backToMenu()">Menu</button>
     </div>
   </div>
 </div>
-<script src="https://cdn.jsdelivr.net/npm/matter-js@0.19.0/build/matter.min.js"></script>
+<!-- ============================================================
+     STATS LOG MODAL
+     ============================================================ -->
+<div id="statsLogModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.92); z-index:9999; overflow-y:auto; padding:24px; color:#dde4ff; font-family:'Segoe UI',Arial,sans-serif;">
+  <div style="max-width:860px; margin:0 auto;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+      <span style="font-size:0.75rem;letter-spacing:2px;color:#888">Press ESC or click Close to dismiss</span>
+      <button onclick="toggleStatsLog()" style="background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.2);border-radius:8px;color:#dde4ff;padding:5px 16px;cursor:pointer;font-size:0.85rem;">Close</button>
+    </div>
+    <div id="statsLogContent" style="font-size:13px; line-height:1.6;">
+      <!-- Filled by toggleStatsLog() JS -->
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================
+     ACHIEVEMENTS MODAL
+     ============================================================ -->
+<div id="achievementsModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.94); z-index:9999; overflow-y:auto; padding:24px; color:#dde4ff; font-family:'Segoe UI',Arial,sans-serif;">
+  <div style="max-width:860px; margin:0 auto;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+      <h2 style="color:#ffcc00; margin:0; font-size:1.3rem;">🏆 Achievements</h2>
+      <button onclick="document.getElementById('achievementsModal').style.display='none'" style="background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.2);border-radius:8px;color:#dde4ff;padding:5px 16px;cursor:pointer;font-size:0.85rem;">Close</button>
+    </div>
+    <div id="achievementsGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px;">
+      <!-- Filled by showAchievementsModal() -->
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================
+     BOSS BEATEN SECRET SCREEN
+     ============================================================ -->
+<div id="bossBeatenOverlay" style="display:none; position:fixed; inset:0; background:#000; z-index:9998; flex-direction:column; align-items:center; justify-content:center;">
+  <p id="bossBeatenText" style="color:#cc00ee; font-size:26px; font-family:Arial,sans-serif; text-align:center; opacity:0; transition:opacity 1.2s ease; line-height:1.6; max-width:540px; padding:0 20px;">
+    He is still out there...<br>Find clues hidden in the arenas with your supers.
+  </p>
+  <button id="bossBeatenContinue" class="btn" style="display:none; margin-top:36px; font-size:1rem; padding:12px 32px;" onclick="closeBossBeatenScreen()">Continue</button>
+</div>
+
 <script src="SMC.js"></script>
 </body>
 </html>
