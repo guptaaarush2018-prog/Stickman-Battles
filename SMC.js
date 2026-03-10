@@ -11,7 +11,7 @@ ctx.imageSmoothingEnabled = true;
 const GAME_W = 900;
 const GAME_H = 520;
 
-// Resize canvas to fill the browser window (no aspect ratio preservation)
+// Resize canvas to fill the browser window; game world stays GAME_W x GAME_H (fixed resolution)
 function resizeCanvas() {
   canvas.width  = window.innerWidth;
   canvas.height = window.innerHeight;
@@ -62,6 +62,11 @@ let screenShake     = 0;
 // Dynamic camera zoom — lerped each frame
 let camZoomTarget = 1, camZoomCur = 1;
 let hitStopFrames = 0; // frames to freeze game for hit impact feel
+// Camera dead zone: don't update target until center moves beyond this (reduces jitter)
+const CAMERA_DEAD_ZONE = 18;
+const CAMERA_PADDING = 120;
+const CAMERA_LERP_ZOOM = 0.08;
+const CAMERA_LERP_POS = 0.08;
 
 // ============================================================
 // NETWORK MANAGER — WebSocket multiplayer via Socket.IO
@@ -228,8 +233,10 @@ const NetworkManager = (function() {
 let onlineMode       = false;  // true when playing online multiplayer
 let onlineReady      = false;  // true when both players are connected
 let onlineLocalSlot  = 0;      // 1 or 2 — which player this machine controls
+let _onlineGameMode  = '2p';   // game mode selected by host for online session
 
 let _cheatBuffer = ''; // tracks recent keypresses for cheat codes
+let unlockedMegaknight = (localStorage.getItem('smc_megaknight') === '1'); // unlocked via cheat code
 let camXTarget = 450, camYTarget = 260, camXCur = 450, camYCur = 260;
 
 let lightningBolts   = [];    // { x, y, timer, segments } — Thor perk visual lightning
@@ -256,6 +263,8 @@ let bossPhaseFlash = 0;  // countdown for white screen flash on boss phase trans
 let abilityFlashTimer  = 0;  // frames remaining for ability ring flash
 let abilityFlashPlayer = null; // player who activated ability
 let frameCount      = 0;
+let aiTick          = 0;    // AI update runs every N frames (see AI_TICK_INTERVAL)
+const AI_TICK_INTERVAL = 15;
 let currentArena    = null;  // the arena data object
 let currentArenaKey = 'grass';
 
@@ -266,9 +275,6 @@ let bgBuildings = [];
 
 // True-boss unlock (entered via code or secret letter hunt)
 let unlockedTrueBoss = !!localStorage.getItem('smc_trueform');
-
-// Megaknight class unlock
-let unlockedMegaknight = (localStorage.getItem('smc_megaknight') === '1');
 
 // True Form boss global state
 let tfGravityInverted  = false;
@@ -1907,17 +1913,21 @@ function spawnRing(x, y) {
 
 function checkWeaponSparks() {
   if (!settings.particles) return;
-  const all = [...players, ...minions, ...(trainingDummies || [])].filter(f => f.health > 0 && f._weaponTip && f._weaponTip.attacking);
+  const pool = [...players, ...minions, ...(trainingDummies || [])].filter(f => f.health > 0 && f.attackTimer > 0 && f.weapon && f.weapon.type === 'melee');
+  const all = pool.map(f => {
+    const tip = f._weaponTip || (f.getWeaponTipPos && f.getWeaponTipPos());
+    return tip ? { f, tip: { x: tip.x, y: tip.y, attacking: true } } : null;
+  }).filter(Boolean);
   for (let i = 0; i < all.length; i++) {
     for (let j = i + 1; j < all.length; j++) {
       const a = all[i], b = all[j];
-      if (!a._weaponTip || !b._weaponTip) continue;
-      if ((a._weaponClashCd || 0) > 0 || (b._weaponClashCd || 0) > 0) continue;
-      const dx = a._weaponTip.x - b._weaponTip.x;
-      const dy = a._weaponTip.y - b._weaponTip.y;
+      if (!a.tip.attacking || !b.tip.attacking) continue;
+      if ((a.f._weaponClashCd || 0) > 0 || (b.f._weaponClashCd || 0) > 0) continue;
+      const dx = a.tip.x - b.tip.x;
+      const dy = a.tip.y - b.tip.y;
       if (dx * dx + dy * dy < 28 * 28) {
-        const mx = (a._weaponTip.x + b._weaponTip.x) / 2;
-        const my = (a._weaponTip.y + b._weaponTip.y) / 2;
+        const mx = (a.tip.x + b.tip.x) / 2;
+        const my = (a.tip.y + b.tip.y) / 2;
         for (let s = 0; s < 10 && particles.length < MAX_PARTICLES; s++) {
           const sa = Math.random() * Math.PI * 2;
           const sv = 2 + Math.random() * 5;
@@ -1927,15 +1937,14 @@ function checkWeaponSparks() {
           particles.push(_p);
         }
         screenShake = Math.max(screenShake, 3);
-        // brief recoil on both fighters
         const nx = dx === 0 ? 1 : dx / Math.sqrt(dx * dx + dy * dy);
-        a.vx += nx * 2; b.vx -= nx * 2;
-        a._weaponClashCd = 20; b._weaponClashCd = 20;
-        if (!a.isAI || !b.isAI) unlockAchievement('clash_master');
+        a.f.vx += nx * 2; b.f.vx -= nx * 2;
+        a.f._weaponClashCd = 20; b.f._weaponClashCd = 20;
+        if (!a.f.isAI || !b.f.isAI) unlockAchievement('clash_master');
       }
     }
   }
-  // decrement clash cooldowns
+  // Decrement clash cooldowns
   [...players, ...minions, ...(trainingDummies || [])].forEach(f => { if (f._weaponClashCd > 0) f._weaponClashCd--; });
 }
 
@@ -2314,7 +2323,8 @@ class VerletRagdoll {
     });
 
     this.color  = f.color || '#aaaaaa';
-    this.timer  = 240;   // frames before despawn (4 seconds)
+    const RAGDOLL_LIFETIME_FRAMES = 240; // despawn after ~4s to prevent accumulation
+    this.timer  = RAGDOLL_LIFETIME_FRAMES;
     this.alpha  = 1;
     this.floorY = 460;   // default floor Y; updated from arena
   }
@@ -2809,6 +2819,12 @@ class Fighter {
   cy() { return this.y + this.h / 2; }
 
   respawn() {
+    // Re-randomize spawn position on each respawn (safe arenas only)
+    if (currentArena && !['creator','void','soccer','lava'].includes(currentArenaKey)) {
+      const sideHint = this.playerNum === 2 ? 'right' : 'left';
+      const newSpawn = pickSafeSpawn(sideHint);
+      if (newSpawn) { this.spawnX = newSpawn.x; this.spawnY = newSpawn.y; }
+    }
     this.x  = this.spawnX;
     this.y  = this.spawnY - 60;
     this.vx = 0; this.vy = 0;
@@ -2963,7 +2979,8 @@ class Fighter {
       }
     }
 
-    if (this.isAI && this.target) this.updateAI();
+    // AI: only update every AI_TICK_INTERVAL frames (smoother movement, less CPU)
+    if (this.isAI && this.target && aiTick % AI_TICK_INTERVAL === 0) this.updateAI();
 
       // ── Standard game physics ──
       const _chaosMoon = gameMode === 'minigames' && currentChaosModifiers.has('moon');
@@ -3154,6 +3171,20 @@ class Fighter {
         spawnParticles(this.cx(), this.cy(), '#ff2200', 24);
         spawnParticles(this.cx(), this.cy(), '#880000', 12);
       }
+
+      // MEGAKNIGHT: Mega Jump at ≤40% HP — massive leap + shockwave on landing
+      if (this.charClass === 'megaknight' && pct <= 0.40 && !this._megaJumping) {
+        this.classPerkUsed   = true;
+        this._megaJumping    = true;
+        this._megaJumpLanded = false;
+        this.vy              = -28;
+        this.canDoubleJump   = true;
+        this.invincible      = 90; // invincible while airborne
+        screenShake = Math.max(screenShake, 18);
+        spawnParticles(this.cx(), this.y + this.h, '#8844ff', 24);
+        spawnParticles(this.cx(), this.y + this.h, '#cc88ff', 16);
+        SoundManager.explosion && SoundManager.explosion();
+      }
     }
   }
 
@@ -3202,6 +3233,41 @@ class Fighter {
         spawnParticles(this.cx(), pl.y, this.color, 10);
         this.ragdollSpin = 0;
       }
+      // MEGAKNIGHT: Mega Jump shockwave on landing
+      if (this._megaJumping && !this._megaJumpLanded && landVy > 8) {
+        this._megaJumping    = false;
+        this._megaJumpLanded = true;
+        this.invincible      = 0;
+        screenShake = Math.max(screenShake, 28);
+        spawnParticles(this.cx(), pl.y, '#8844ff', 30);
+        spawnParticles(this.cx(), pl.y, '#ffffff', 18);
+        const _allF = [...players, ...minions, ...trainingDummies];
+        for (const f of _allF) {
+          if (f === this || f.health <= 0) continue;
+          const _d = Math.hypot(f.cx() - this.cx(), f.cy() - this.cy());
+          if (_d < 200) {
+            const _pct = 1 - _d / 200;
+            dealDamage(this, f, Math.round(45 * _pct), Math.round(55 * _pct));
+            f.vy = Math.min(f.vy, -22 * _pct);
+            f.vx += Math.sign(f.cx() - this.cx()) * 12 * _pct;
+          }
+        }
+        SoundManager.explosion && SoundManager.explosion();
+      }
+      // MEGAKNIGHT: aerial smash landing (from Q ability)
+      if (this._megaSmashing && landVy > 6) {
+        this._megaSmashing = false;
+        screenShake = Math.max(screenShake, 14);
+        spawnParticles(this.cx(), pl.y, '#8844ff', 16);
+        const _allF2 = [...players, ...minions, ...trainingDummies];
+        for (const f of _allF2) {
+          if (f === this || f.health <= 0) continue;
+          if (Math.hypot(f.cx() - this.cx(), f.cy() - this.cy()) < 140) {
+            dealDamage(this, f, 22, 30);
+            f.vy = Math.min(f.vy, -15);
+          }
+        }
+      }
     } else if (minPen === dBottom && this.vy <= 0) {
       // Bumped head on underside
       this.y  = pl.y + pl.h;
@@ -3217,8 +3283,10 @@ class Fighter {
     }
   }
 
+  // Player state machine: idle | run | jump | fall | attack | stunned | ragdoll | dead
   updateState() {
-    if (this.ragdollTimer > 0)         this.state = 'ragdoll';
+    if (this.health <= 0)              this.state = 'dead';
+    else if (this.ragdollTimer > 0)     this.state = 'ragdoll';
     else if (this.hurtTimer > 0)       this.state = 'hurt';
     else if (this.stunTimer > 0)       this.state = 'stunned';
     else if (this.attackTimer > 0)     this.state = 'attacking';
@@ -3250,6 +3318,7 @@ class Fighter {
   // ---- ATTACK ----
   attack(target) {
     if (this.backstageHiding) return;
+    if (this.state === 'dead' || this.state === 'stunned' || this.state === 'ragdoll') return;
     if (this.cooldown > 0 || this.health <= 0 || this.stunTimer > 0 || this.ragdollTimer > 0) return;
     if (this.weapon.type === 'melee') {
       // Use closest enemy (dummy, minion, or training target) if target is null
@@ -3282,7 +3351,33 @@ class Fighter {
 
   ability(target) {
     if (this.backstageHiding) return;
+    if (this.state === 'dead' || this.state === 'stunned' || this.state === 'ragdoll') return;
     if (this.abilityCooldown > 0 || this.health <= 0 || this.stunTimer > 0 || this.ragdollTimer > 0) return;
+    // MEGAKNIGHT class override: Q = Ground Slam (grounded) or Aerial Smash (airborne)
+    if (this.charClass === 'megaknight') {
+      this.abilityCooldown  = 90;
+      this.abilityCooldown2 = 90;
+      abilityFlashTimer = 14; abilityFlashPlayer = this;
+      if (!this.onGround) {
+        // Aerial smash: fast-fall and deal AoE on landing
+        this.vy = 24;
+        this._megaSmashing = true;
+      } else {
+        // Ground slam: AoE knockup around self
+        const _allF = [...players, ...minions, ...trainingDummies];
+        for (const f of _allF) {
+          if (f === this || f.health <= 0) continue;
+          if (Math.hypot(f.cx() - this.cx(), f.cy() - this.cy()) < 140) {
+            dealDamage(this, f, 30, 45);
+            f.vy = Math.min(f.vy, -18);
+          }
+        }
+        spawnParticles(this.cx(), this.y + this.h, '#8844ff', 18);
+        screenShake = Math.max(screenShake, 16);
+      }
+      spawnParticles(this.cx(), this.cy(), '#cc88ff', 10);
+      return;
+    }
     const _safeTarget = target || this.target || trainingDummies[0] || players.find(p => p !== this);
     this.weapon.ability(this, _safeTarget);
     this.abilityCooldown = this.weapon.abilityCooldown;
@@ -3292,12 +3387,44 @@ class Fighter {
 
   // Dedicated super / ultimate activation (separate button from Q)
   useSuper(target) {
-    if (this.health <= 0 || this.stunTimer > 0 || this.ragdollTimer > 0) return;
+    if (this.state === 'dead' || this.stunTimer > 0 || this.ragdollTimer > 0) return;
     if (!this.superReady) return;
     this.activateSuper(target);
   }
 
   activateSuper(target) {
+    // MEGAKNIGHT super: grab nearest enemy and hurl them across the arena
+    if (this.charClass === 'megaknight') {
+      const _allF = [...players, ...minions, ...trainingDummies];
+      const nearest = _allF
+        .filter(f => f !== this && f.health > 0 && !f.isBoss)
+        .sort((a, b) => Math.hypot(a.cx()-this.cx(),a.cy()-this.cy()) - Math.hypot(b.cx()-this.cx(),b.cy()-this.cy()))[0];
+      if (nearest && Math.hypot(nearest.cx()-this.cx(), nearest.cy()-this.cy()) < 220) {
+        const throwDir = nearest.cx() > this.cx() ? 1 : -1;
+        nearest.vx = throwDir * 28;
+        nearest.vy = -20;
+        nearest.stunTimer    = 45;
+        nearest.ragdollTimer = 60;
+        dealDamage(this, nearest, 35, 40);
+        spawnParticles(nearest.cx(), nearest.cy(), '#8844ff', 20);
+        screenShake = Math.max(screenShake, 22);
+        SoundManager.heavyHit && SoundManager.heavyHit();
+      } else {
+        // No nearby target — do a ground shockwave instead
+        for (const f of _allF) {
+          if (f === this || f.health <= 0) continue;
+          if (Math.hypot(f.cx()-this.cx(), f.cy()-this.cy()) < 260) {
+            dealDamage(this, f, 20, 35);
+            f.vy = Math.min(f.vy, -16);
+          }
+        }
+        spawnParticles(this.cx(), this.cy(), '#8844ff', 28);
+        screenShake = Math.max(screenShake, 18);
+      }
+      this.superMeter = 0; this.superReady = false;
+      this.invincible = Math.max(this.invincible, 90);
+      return;
+    }
     // Boss heals 5% of max HP (no max HP increase); players gain +20 max HP and heal 20
     if (this.isBoss) {
       // Boss no longer heals on super — super is purely offensive
@@ -4136,7 +4263,7 @@ class Fighter {
                         y: hy + Math.sin(_tipAngle) * _tipRange * 0.85,
                         attacking };
 
-    // --- Weapon glow (pulsing) ---
+    // --- Weapon glow: stronger when swinging (prevents clipping into background) ---
     const _glowColors = {
       sword: '#c8e8ff', hammer: '#ffaa44', gun: '#ff4444', axe: '#ff6633',
       spear: '#8888ff', bow: '#aadd88', shield: '#4488ff', scythe: '#aabbcc',
@@ -4146,7 +4273,7 @@ class Fighter {
     if (k !== 'gauntlet' && _glowColors[k]) {
       const pulse = 0.5 + 0.5 * Math.sin(frameCount * 0.12 + (this.playerNum || 0));
       ctx.shadowColor = _glowColors[k];
-      ctx.shadowBlur  = attacking ? 14 + pulse * 10 : 5 + pulse * 5;
+      ctx.shadowBlur  = attacking ? Math.max(15, 18 + pulse * 8) : 5 + pulse * 5;
     }
 
     if (k === 'sword') {
@@ -6803,6 +6930,8 @@ function backToMenu() {
   resetTFState();
   canvas.style.display = 'block'; // keep visible as animated menu background
   document.getElementById('hud').style.display            = 'none';
+  const chatElBTM = document.getElementById('onlineChat');
+  if (chatElBTM) chatElBTM.style.display = 'none';
   document.getElementById('pauseOverlay').style.display    = 'none';
   document.getElementById('gameOverOverlay').style.display = 'none';
   document.getElementById('menu').style.display            = 'grid';
@@ -7706,6 +7835,37 @@ function drawFakeDeathScene() {
 }
 
 // ============================================================
+// CAMERA — bounding box tracks all alive players, smooth lerp, dead zone
+// ============================================================
+function updateCamera() {
+  const activePlayers = [...players, ...trainingDummies, ...minions].filter(p => p.health > 0);
+  if (activePlayers.length === 0) return;
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const p of activePlayers) {
+    minX = Math.min(minX, p.x);
+    maxX = Math.max(maxX, p.x + (p.w || 0));
+    minY = Math.min(minY, p.y);
+    maxY = Math.max(maxY, p.y + (p.h || 0));
+  }
+  const width  = (maxX - minX) + CAMERA_PADDING;
+  const height = (maxY - minY) + CAMERA_PADDING;
+  const zoomX  = GAME_W / width;
+  const zoomY  = GAME_H / height;
+  camZoomTarget = Math.min(zoomX, zoomY, 1.3);
+  const newCX = (minX + maxX) / 2;
+  const newCY = (minY + maxY) / 2;
+  // Dead zone: only update target when center has moved beyond threshold (reduces jitter)
+  const dx = newCX - camXTarget, dy = newCY - camYTarget;
+  if (Math.hypot(dx, dy) > CAMERA_DEAD_ZONE) {
+    camXTarget = newCX;
+    camYTarget = newCY;
+  }
+  camZoomCur += (camZoomTarget - camZoomCur) * CAMERA_LERP_ZOOM;
+  camXCur    += (camXTarget - camXCur) * CAMERA_LERP_POS;
+  camYCur    += (camYTarget - camYCur) * CAMERA_LERP_POS;
+}
+
+// ============================================================
 // GAME LOOP
 // ============================================================
 function gameLoop() {
@@ -7714,12 +7874,14 @@ function gameLoop() {
   // Hitstop: freeze gameplay for a few frames on strong hits
   if (hitStopFrames > 0) {
     hitStopFrames--;
-    screenShake *= 0.84;
+    screenShake *= 0.9; // decay-based shake
     requestAnimationFrame(gameLoop);
     return;
   }
   frameCount++;
+  aiTick++;
 
+  // ---------- Phase: updateInput ----------
   // Online: tick network + apply remote player state
   if (onlineMode && gameRunning && NetworkManager.connected) {
     const localP  = players.find(p => !p.isRemote);
@@ -7742,9 +7904,9 @@ function gameLoop() {
     }
   }
 
-  processInput();
+  processInput(); // updateInput
 
-  // ---- BOSS ARENA: oscillating platforms + floor hazard state machine ----
+  // ---------- Phase: updateBossArena (platforms, floor hazard) ----------
   if (currentArena.isBossArena) {
     // Animate moving platforms — random-lerp targets for unpredictable movement
     // Boss arena: 2x speed (shorter timer range, faster lerp)
@@ -7841,58 +8003,18 @@ function gameLoop() {
     }
   }
 
-  // ---- Camera system ----
-  const baseScaleX = canvas.width  / GAME_W;
-  const baseScaleY = canvas.height / GAME_H;
+  // ---------- Phase: updateCamera (bounding box, dead zone, lerp) ----------
+  const baseScale = Math.min(canvas.width / GAME_W, canvas.height / GAME_H);
+  const baseScaleX = baseScale;
+  const baseScaleY = baseScale;
 
   let camZoom, camCX, camCY;
   if (bossDeathScene) {
-    // Cinematic zoom: center on orb
     camZoom = bossDeathScene.camZoom || 1;
     camCX   = bossDeathScene.orbX;
     camCY   = bossDeathScene.orbY;
   } else {
-    // Dynamic zoom: keep all active fighters (including minions/enemies) in frame
-    const entities = [...players, ...trainingDummies, ...minions].filter(e => e.health > 0);
-    if (entities.length >= 2) {
-      let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-      for (const e of entities) {
-        minX = Math.min(minX, e.x); maxX = Math.max(maxX, e.x + e.w);
-        minY = Math.min(minY, e.y); maxY = Math.max(maxY, e.y + e.h);
-      }
-      const PAD = 80;
-      // Only zoom out if players would go off-screen at zoom=1; otherwise lock at 1
-      const rawCX = (minX + maxX) / 2;
-      const rawCY = (minY + maxY) / 2;
-      // Check if the bounding box fits within the game world at zoom=1
-      const fitsX = (maxX - minX + PAD * 2) <= GAME_W;
-      const fitsY = (maxY - minY + PAD * 2) <= GAME_H;
-      if (fitsX && fitsY) {
-        camZoomTarget = 1; // players on-screen — no zoom change
-      } else {
-        const boxW = Math.max(maxX - minX + PAD * 2, GAME_W * 0.35);
-        const boxH = Math.max(maxY - minY + PAD * 2, GAME_H * 0.35);
-        const zoomX = GAME_W / boxW;
-        const zoomY = GAME_H / boxH;
-        camZoomTarget = Math.min(zoomX, zoomY, 1.0); // never zoom in, only out
-        camZoomTarget = Math.max(camZoomTarget, 0.45);
-      }
-      // Fix: when zoomed out past 50%, half-view exceeds half game-world → just center
-      const hVW = GAME_W / (2 * camZoomTarget);
-      const hVH = GAME_H / (2 * camZoomTarget);
-      camXTarget = hVW >= GAME_W / 2 ? GAME_W / 2 : clamp(rawCX, hVW, GAME_W - hVW);
-      camYTarget = hVH >= GAME_H / 2 ? GAME_H / 2 : clamp(rawCY, hVH, GAME_H - hVH);
-    } else {
-      camZoomTarget = 1;
-      camXTarget = GAME_W / 2;
-      camYTarget = GAME_H / 2;
-    }
-    // Dead zone: don't chase tiny movements (reduces jitter)
-    if (Math.abs(camXCur - camXTarget) < 1.5) camXTarget = camXCur;
-    if (Math.abs(camYCur - camYTarget) < 1.5) camYTarget = camYCur;
-    camZoomCur = lerp(camZoomCur, camZoomTarget, 0.06);
-    camXCur    = lerp(camXCur,    camXTarget,    0.08);
-    camYCur    = lerp(camYCur,    camYTarget,    0.08);
+    updateCamera();
     camZoom = camZoomCur;
     camCX   = camXCur;
     camCY   = camYCur;
@@ -7915,6 +8037,7 @@ function gameLoop() {
   const sy = (Math.random() - 0.5) * screenShake + (canvas.height / 2 - camCY * finalScY);
   ctx.setTransform(finalScX, 0, 0, finalScY, sx, sy);
 
+  // ---------- Phase: render (world, entities, particles, HUD) ----------
   drawBackground();
   drawPlatforms();
   if (gameMode === 'minigames' && minigameType === 'soccer') drawSoccer();
@@ -7979,9 +8102,9 @@ function gameLoop() {
     if (bossDeathScene) updateBossDeathScene();
   }
 
-  // Projectiles
+  // ---------- Phase: updatePhysics/updateCombat (projectiles, minions, players) ----------
   projectiles.forEach(p => p.update());
-  projectiles = projectiles.filter(p => p.active);
+  projectiles = projectiles.filter(p => p.active); // prevent leak
   projectiles.forEach(p => p.draw());
 
   // Minions (boss-spawned)
@@ -8018,7 +8141,7 @@ function gameLoop() {
     }
   }
 
-  // Update Verlet death ragdolls
+  // Verlet death ragdolls — update and remove when lifetime expires (prevent leak)
   verletRagdolls.forEach(vr => vr.update());
   verletRagdolls = verletRagdolls.filter(vr => !vr.isDone());
 
@@ -8054,7 +8177,7 @@ function gameLoop() {
   updateFakeDeathScene();
   drawFakeDeathScene();
 
-  // Particles — update, recycle dead ones back to pool, draw live ones
+  // ---------- Phase: updateParticles (prevent memory leak: remove expired) ----------
   const _liveParticles = [];
   for (let i = 0; i < particles.length; i++) {
     const p = particles[i];
@@ -8073,14 +8196,14 @@ function gameLoop() {
       _recycleParticle(p);
     }
   }
-  particles = _liveParticles;
+  particles = _liveParticles; // keep only live (life > 0) to prevent leak
   ctx.globalAlpha = 1;
 
-  // Damage texts
+  // Damage texts — filter expired to prevent leak
   damageTexts.forEach(d => { d.update(); d.draw(); });
   damageTexts = damageTexts.filter(d => d.life > 0);
 
-  // Respawn countdowns
+  // Respawn countdowns — filter expired to prevent leak
   for (const cd of respawnCountdowns) {
     cd.framesLeft--;
     if (cd.framesLeft <= 0) continue;
@@ -8123,7 +8246,7 @@ function gameLoop() {
     ctx.restore();
   }
 
-  screenShake *= 0.84;
+  screenShake *= 0.9; // decay-based shake (smoother than instant drop)
   // Reset to non-shake transform (keep scale + camera centering, remove shake)
   ctx.setTransform(finalScX, 0, 0, finalScY,
     canvas.width  / 2 - camCX * finalScX,
@@ -8186,11 +8309,13 @@ const keyHeldFrames = {};   // key → frames held continuously
 const SCROLL_BLOCK = new Set([' ', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 's', 'S', '/']);
 
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape' || e.key === 'p' || e.key === 'P') { pauseGame(); return; }
+  // Don't pause when typing in chat
+  const chatFocused = document.activeElement && document.activeElement.id === 'chatInput';
+  if (!chatFocused && (e.key === 'Escape' || e.key === 'p' || e.key === 'P')) { pauseGame(); return; }
   // Cheat code: type TRUEFORM anywhere in menu to unlock True Form
   if (!gameRunning && e.key.length === 1) {
-    _cheatBuffer = ((_cheatBuffer || '') + e.key.toUpperCase()).slice(-8);
-    if (_cheatBuffer === 'TRUEFORM') {
+    _cheatBuffer = ((_cheatBuffer || '') + e.key.toUpperCase()).slice(-12);
+    if (_cheatBuffer.endsWith('TRUEFORM')) {
       _cheatBuffer = '';
       if (!unlockedTrueBoss) {
         unlockedTrueBoss = true;
@@ -8210,6 +8335,23 @@ document.addEventListener('keydown', e => {
         document.body.appendChild(notif);
         setTimeout(() => notif.remove(), 3000);
       }
+    }
+    // MEGAKNIGHT cheat: type MEGAKNIGHT in menu
+    if (_cheatBuffer.endsWith('MEGAKNIGHT')) {
+      _cheatBuffer = '';
+      unlockedMegaknight = true;
+      localStorage.setItem('smc_megaknight', '1');
+      ['p1Class','p2Class'].forEach(id => {
+        const sel = document.getElementById(id);
+        if (sel && !sel.querySelector('option[value="megaknight"]')) {
+          const opt = document.createElement('option'); opt.value = 'megaknight'; opt.textContent = 'Megaknight ★'; sel.appendChild(opt);
+        }
+      });
+      const notif2 = document.createElement('div');
+      notif2.textContent = '★ MEGAKNIGHT UNLOCKED ★';
+      notif2.style.cssText = 'position:fixed;top:20%;left:50%;transform:translateX(-50%);background:rgba(80,0,160,0.95);color:#fff;padding:14px 32px;border-radius:12px;font-size:1.2rem;font-weight:900;letter-spacing:2px;z-index:9999;pointer-events:none;text-align:center;box-shadow:0 0 40px #8844ff;';
+      document.body.appendChild(notif2);
+      setTimeout(() => notif2.remove(), 3000);
     }
   }
   if (e.key === 'Tab' && tutorialMode) { e.preventDefault(); advanceTutorialStep(); return; }
@@ -8319,11 +8461,82 @@ function processInput() {
 function applyCode(val) {
   const code  = (val || '').trim().toUpperCase();
   const msgEl = document.getElementById('codeMessage');
+  const ok  = (t) => { if (msgEl) { msgEl.textContent = '✓ ' + t; msgEl.style.color = '#44ff88'; msgEl.style.fontSize = ''; } };
+  const err = (t) => { if (msgEl) { msgEl.textContent = '✗ ' + t; msgEl.style.color = '#ff4444'; msgEl.style.fontSize = ''; } };
+
   if (code === 'TRUEFORM') {
     unlockedTrueBoss = true;
-    if (msgEl) { msgEl.textContent = '\u2713 True Creator unlocked! Start a boss fight.'; msgEl.style.color = '#cc00ee'; }
+    localStorage.setItem('smc_trueform','1');
+    const card = document.getElementById('modeTrueForm');
+    if (card) card.style.display = '';
+    ok('True Creator unlocked! Start a boss fight.');
+  } else if (code === 'MEGAKNIGHT') {
+    unlockedMegaknight = true;
+    localStorage.setItem('smc_megaknight','1');
+    ['p1Class','p2Class'].forEach(id => {
+      const sel = document.getElementById(id);
+      if (sel && !sel.querySelector('option[value="megaknight"]')) {
+        const opt = document.createElement('option'); opt.value = 'megaknight'; opt.textContent = 'Megaknight ★'; sel.appendChild(opt);
+      }
+    });
+    ok('Megaknight class unlocked! Select it in the class dropdown.');
+  } else if (code.startsWith('MAP:')) {
+    const mapKey = code.slice(4).toLowerCase();
+    if (!ARENAS[mapKey]) { err('Unknown arena. Try: grass lava space city forest ice ruins'); return; }
+    if (gameRunning) {
+      switchArena(mapKey);
+      ok('Switched to ' + mapKey + ' arena!');
+    } else {
+      selectedArena = mapKey;
+      document.querySelectorAll('.arena-card').forEach(c => c.classList.toggle('active', c.dataset.arena === mapKey));
+      ok('Arena set to ' + mapKey + '!');
+    }
+  } else if (code.startsWith('WEAPON:')) {
+    const wKey = code.slice(7).toLowerCase();
+    if (!WEAPONS[wKey]) { err('Unknown weapon. Try: sword hammer gun axe spear bow shield scythe'); return; }
+    if (gameRunning) {
+      const p = players.find(pl => !pl.isAI && !pl.isBoss);
+      if (p) { p.weaponKey = wKey; p.weapon = WEAPONS[wKey]; p.cooldown = 0; p.abilityCooldown = 0; }
+      ok('Weapon changed to ' + wKey + '!');
+    } else { err('Enter WEAPON: codes while in-game.'); }
+  } else if (code.startsWith('CLASS:')) {
+    const cKey = code.slice(6).toLowerCase();
+    if (!CLASSES[cKey] && cKey !== 'megaknight') { err('Unknown class. Try: none thor kratos ninja gunner archer paladin berserker megaknight'); return; }
+    if (gameRunning) {
+      const p = players.find(pl => !pl.isAI && !pl.isBoss);
+      if (p) applyClass(p, cKey);
+      ok('Class changed to ' + cKey + '!');
+    } else { err('Enter CLASS: codes while in-game.'); }
+  } else if (code === 'GODMODE') {
+    if (gameRunning) {
+      const p = players.find(pl => !pl.isAI && !pl.isBoss);
+      if (p) { p.invincible = 99999; p.health = p.maxHealth; }
+      ok('GOD MODE — you cannot be hurt!');
+    } else { err('Enter GODMODE while in-game.'); }
+  } else if (code === 'FULLHEAL') {
+    if (gameRunning) {
+      players.filter(pl => !pl.isBoss).forEach(p => { p.health = p.maxHealth; spawnParticles(p.cx(), p.cy(), '#44ff88', 18); });
+      ok('All players fully healed!');
+    } else { err('Enter FULLHEAL while in-game.'); }
+  } else if (code === 'SUPERJUMP') {
+    if (gameRunning) {
+      const p = players.find(pl => !pl.isAI && !pl.isBoss);
+      if (p) { p.vy = -36; p.canDoubleJump = true; }
+      ok('SUPER JUMP!');
+    } else { err('Enter SUPERJUMP while in-game.'); }
+  } else if (code === 'KILLBOSS') {
+    if (gameRunning) {
+      const boss = players.find(p => p.isBoss);
+      if (boss) boss.health = 1;
+      ok('Boss is nearly dead!');
+    } else { err('Enter KILLBOSS while in-game.'); }
+  } else if (code === 'HELP' || code === 'CODES') {
+    if (msgEl) {
+      msgEl.textContent = 'TRUEFORM · MEGAKNIGHT · GODMODE · FULLHEAL · SUPERJUMP · KILLBOSS · MAP:<arena> · WEAPON:<key> · CLASS:<key>';
+      msgEl.style.color = '#aabbff'; msgEl.style.fontSize = '0.7rem';
+    }
   } else {
-    if (msgEl) { msgEl.textContent = '\u2717 Unknown code.'; msgEl.style.color = '#ff4444'; }
+    err('Unknown code. Type HELP for a list.');
   }
 }
 
@@ -8978,12 +9191,36 @@ function startGame() {
   }
 }
 
+// Pick a safe spawn position on a platform in the preferred half of the arena.
+// Returns {x, y} or null if the arena handles spawns specially.
+function pickSafeSpawn(sideHint) {
+  if (!currentArena) return null;
+  const skip = ['creator','void','soccer','lava'];
+  if (skip.includes(currentArenaKey)) return null;
+  const raised = currentArena.platforms.filter(pl => !pl.isFloor && !pl.isFloorDisabled && pl.w > 60);
+  const floor  = currentArena.platforms.find(pl => pl.isFloor && !pl.isFloorDisabled);
+  if (!raised.length) {
+    if (!floor) return null;
+    const fx = floor.x + (sideHint === 'right' ? floor.w * 0.65 : floor.w * 0.25);
+    return { x: fx, y: floor.y - 60 };
+  }
+  const preferred = sideHint === 'any' ? raised
+    : raised.filter(pl => sideHint === 'right' ? (pl.x + pl.w > GAME_W / 2) : (pl.x < GAME_W / 2));
+  const pool = preferred.length ? preferred : raised;
+  const pl   = pool[Math.floor(Math.random() * pool.length)];
+  const rx   = pl.x + 14 + Math.random() * Math.max(0, pl.w - 28);
+  return { x: rx, y: pl.y - 60 };
+}
+
 function _startGameCore() {
   document.getElementById('menu').style.display            = 'none';
   document.getElementById('gameOverOverlay').style.display  = 'none';
   document.getElementById('pauseOverlay').style.display     = 'none';
   canvas.style.display = 'block';
   document.getElementById('hud').style.display = 'flex';
+  // Show chat widget if online
+  const chatEl = document.getElementById('onlineChat');
+  if (chatEl) chatEl.style.display = onlineMode ? 'flex' : 'none';
 
   // Resolve arena
   const isBossMode      = gameMode === 'boss';
@@ -9072,6 +9309,7 @@ function _startGameCore() {
   camZoomCur = 1; camZoomTarget = 1;
   camXCur = GAME_W / 2; camYCur = GAME_H / 2;
   camXTarget = GAME_W / 2; camYTarget = GAME_H / 2;
+  aiTick = 0;
   // Reset boss floor state for every game start
   bossFloorState = 'normal';
   bossFloorType  = 'lava';
@@ -9088,7 +9326,8 @@ function _startGameCore() {
   // Player 1  (W/A/D move+boost · S=shield · Space=attack · Q=ability)
   const p1 = new Fighter(160, 300, c1, w1, { left:'a', right:'d', jump:'w', attack:' ', shield:'s', ability:'q', super:'e' }, p1IsBot, p1Diff);
   p1.playerNum = 1; p1.name = p1IsBot ? 'BOT1' : 'P1'; p1.lives = chosenLives;
-  p1.spawnX = 160; p1.spawnY = 300;
+  { const _sp = pickSafeSpawn('left') || { x: 160, y: 300 };
+    p1.spawnX = _sp.x; p1.spawnY = _sp.y; p1.x = _sp.x; p1.y = _sp.y; }
   p1.hat  = document.getElementById('p1Hat')?.value  || 'none';
   p1.cape = document.getElementById('p1Cape')?.value || 'none';
   if (p1Skin !== 'default' && SKIN_COLORS[p1Skin]) p1.color = SKIN_COLORS[p1Skin];
@@ -9119,7 +9358,8 @@ function _startGameCore() {
       const c2b  = document.getElementById('p2Color').value;
       const p2h  = new Fighter(720, 300, c2b, w2b, { left:'ArrowLeft', right:'ArrowRight', jump:'ArrowUp', attack:'Enter', shield:'ArrowDown', ability:'.', super:'/' }, p2IsBot, diff);
       p2h.playerNum = 2; p2h.name = p2IsBot ? 'BOT' : 'P2'; p2h.lives = chosenLives;
-      p2h.spawnX = 720; p2h.spawnY = 300;
+      { const _sp2 = pickSafeSpawn('right') || { x: 720, y: 300 };
+        p2h.spawnX = _sp2.x; p2h.spawnY = _sp2.y; p2h.x = _sp2.x; p2h.y = _sp2.y; }
       p2h.hat  = document.getElementById('p2Hat')?.value  || 'none';
       p2h.cape = document.getElementById('p2Cape')?.value || 'none';
       applyClass(p2h, getClassChoice('p2Class'));
@@ -9149,7 +9389,8 @@ function _startGameCore() {
       // 2P training: both fighters present, shared dummy
       p2 = new Fighter(720, 300, c2, w2, { left:'ArrowLeft', right:'ArrowRight', jump:'ArrowUp', attack:'Enter', shield:'ArrowDown', ability:'.', super:'/' }, p2IsBot, diff);
       p2.playerNum = 2; p2.name = p2IsBot ? 'BOT' : 'P2'; p2.lives = 999;
-      p2.spawnX = 720; p2.spawnY = 300;
+      { const _sp2 = pickSafeSpawn('right') || { x: 720, y: 300 };
+        p2.spawnX = _sp2.x; p2.spawnY = _sp2.y; p2.x = _sp2.x; p2.y = _sp2.y; }
       applyClass(p2, getClassChoice('p2Class'));
       const starterDummy = new Dummy(450, 200);
       starterDummy.playerNum = 3; starterDummy.name = 'DUMMY';
@@ -9182,7 +9423,8 @@ function _startGameCore() {
         { left:'ArrowLeft', right:'ArrowRight', jump:'ArrowUp', attack:'Enter',
           shield:'ArrowDown', ability:'.', super:'/' }, p2IsBot, p2Diff);
       p2mg.playerNum = 2; p2mg.name = p2IsBot ? 'BOT' : 'P2'; p2mg.lives = 99;
-      p2mg.spawnX = 720; p2mg.spawnY = 300;
+      { const _sp2 = pickSafeSpawn('right') || { x: 720, y: 300 };
+        p2mg.spawnX = _sp2.x; p2mg.spawnY = _sp2.y; p2mg.x = _sp2.x; p2mg.y = _sp2.y; }
       p2mg.hat  = document.getElementById('p2Hat')?.value  || 'none';
       p2mg.cape = document.getElementById('p2Cape')?.value || 'none';
       if (p2Skin !== 'default' && SKIN_COLORS[p2Skin]) p2mg.color = SKIN_COLORS[p2Skin];
@@ -9207,7 +9449,8 @@ function _startGameCore() {
   } else {
     p2 = new Fighter(720, 300, c2, w2, { left:'ArrowLeft', right:'ArrowRight', jump:'ArrowUp', attack:'Enter', shield:'ArrowDown', ability:'.', super:'/' }, isBot, diff);
     p2.playerNum = 2; p2.name = p2IsBot ? 'BOT' : 'P2'; p2.lives = chosenLives;
-    p2.spawnX = 720; p2.spawnY = 300;
+    { const _sp2 = pickSafeSpawn('right') || { x: 720, y: 300 };
+      p2.spawnX = _sp2.x; p2.spawnY = _sp2.y; p2.x = _sp2.x; p2.y = _sp2.y; }
     p2.hat  = document.getElementById('p2Hat')?.value  || 'none';
     p2.cape = document.getElementById('p2Cape')?.value || 'none';
     if (p2Skin !== 'default' && SKIN_COLORS[p2Skin]) p2.color = SKIN_COLORS[p2Skin];
@@ -9965,11 +10208,19 @@ function networkJoinRoom() {
       if (statusEl) statusEl.textContent = slot === 1
         ? `✅ Joined as P1 — waiting for opponent…`
         : `✅ Joined as P2 — waiting for host…`;
+      // Show game-mode selector only to host
+      const modeRow = document.getElementById('onlineGameModeRow');
+      if (modeRow) modeRow.style.display = slot === 1 ? 'flex' : 'none';
     },
     // onBothConnected
     () => {
       if (statusEl) statusEl.textContent = '🎮 Both connected! Starting…';
       onlineReady = true;
+      // Guest adopts whatever mode the host selected
+      if (onlineLocalSlot !== 1) {
+        gameMode = _onlineGameMode;
+        selectMode(gameMode);
+      }
       setTimeout(() => startGame(), 600);
     },
     // onRemoteState — handled per-frame via getRemoteState()
@@ -9992,7 +10243,25 @@ function networkJoinRoom() {
     },
     // onRemoteGameEvent
     (ev) => {
-      if (!gameRunning || !onlineMode) return;
+      if (!onlineMode) return;
+      // Achievement sync — runs even in menu
+      if (ev.type === 'achievementUnlocked') {
+        if (ev.data?.id && !earnedAchievements.has(ev.data.id)) unlockAchievement(ev.data.id);
+        return;
+      }
+      // Chat message — runs even outside game
+      if (ev.type === 'chat') {
+        _appendChatMsg(ev.data?.name || 'P2', ev.data?.text || '');
+        return;
+      }
+      // Host broadcasts chosen game mode before start
+      if (ev.type === 'gameModeSelected') {
+        _onlineGameMode = ev.data?.mode || '2p';
+        gameMode = _onlineGameMode;
+        selectMode(gameMode);
+        return;
+      }
+      if (!gameRunning) return;
       if (ev.type === 'respawn') {
         const remote = players.find(p => p.isRemote);
         if (remote) {
@@ -10012,6 +10281,54 @@ function networkJoinRoom() {
       }
     },
   );
+}
+
+function setOnlineGameMode(mode) {
+  _onlineGameMode = mode;
+  gameMode = mode;
+  selectMode(mode);
+  // Update button active states
+  document.querySelectorAll('#onlineGameModeRow .btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.mode === mode);
+  });
+  // Broadcast to guest if connected
+  if (NetworkManager.connected) {
+    NetworkManager.sendGameEvent('gameModeSelected', { mode });
+  }
+}
+
+function sendChatMsg() {
+  const inp = document.getElementById('chatInput');
+  if (!inp) return;
+  const text = inp.value.trim();
+  if (!text) return;
+  inp.value = '';
+  const name = onlineLocalSlot === 1 ? 'P1' : 'P2';
+  _appendChatMsg(name, text);
+  if (NetworkManager.connected) {
+    NetworkManager.sendGameEvent('chat', { name, text });
+  }
+}
+
+function onChatKey(e) {
+  if (e.key === 'Enter') { e.preventDefault(); sendChatMsg(); }
+}
+
+function _appendChatMsg(name, text) {
+  const box = document.getElementById('chatMessages');
+  if (!box) return;
+  const line = document.createElement('div');
+  line.style.cssText = 'font-size:0.72rem;line-height:1.3;word-break:break-word;';
+  const nameEl = document.createElement('span');
+  nameEl.style.cssText = `color:${name === 'P1' ? '#66aaff' : '#ff8844'};font-weight:bold;margin-right:4px;`;
+  nameEl.textContent = name + ':';
+  const textEl = document.createElement('span');
+  textEl.style.color = '#dde';
+  textEl.textContent = text;
+  line.appendChild(nameEl);
+  line.appendChild(textEl);
+  box.appendChild(line);
+  box.scrollTop = box.scrollHeight;
 }
 
 function showToast(msg, duration) {

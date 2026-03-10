@@ -152,6 +152,16 @@
           <label style="color:#88ccff; font-size:0.78rem; white-space:nowrap;">Room Code</label>
           <input id="onlineRoomCode" type="text" placeholder="e.g. FIGHT42" maxlength="20" style="flex:1; padding:4px 7px; background:rgba(0,0,0,0.4); border:1px solid rgba(100,180,255,0.4); border-radius:5px; color:#cce; font-size:0.75rem; text-transform:uppercase;">
         </div>
+        <!-- Game mode selector — only visible to the host (slot 1) after joining -->
+        <div id="onlineGameModeRow" style="display:none; flex-direction:column; gap:4px;">
+          <div style="color:#88ccff; font-size:0.72rem;">Game Mode (host picks)</div>
+          <div style="display:flex; gap:5px; flex-wrap:wrap;">
+            <button class="btn active" data-mode="2p" onclick="setOnlineGameMode('2p')" style="font-size:0.72rem; padding:3px 9px;">1v1</button>
+            <button class="btn" data-mode="boss" onclick="setOnlineGameMode('boss')" style="font-size:0.72rem; padding:3px 9px;">Boss</button>
+            <button class="btn" data-mode="minigames" onclick="setOnlineGameMode('minigames')" style="font-size:0.72rem; padding:3px 9px;">Minigames</button>
+            <button class="btn" data-mode="training" onclick="setOnlineGameMode('training')" style="font-size:0.72rem; padding:3px 9px;">Training</button>
+          </div>
+        </div>
         <div id="onlineStatus" style="font-size:0.72rem; color:#aab; min-height:18px;"></div>
         <button class="btn" onclick="networkJoinRoom()" style="padding:6px 18px; font-size:0.8rem;">Connect</button>
       </div>
@@ -656,6 +666,17 @@
   <textarea id="mcJSON" rows="4" style="width:100%;box-sizing:border-box;background:#0a0a1e;color:#88ff88;border:1px solid #444;padding:6px;font-size:11px;font-family:monospace;border-radius:4px;" placeholder="Paste exported JSON here to import..."></textarea>
   <div style="margin-top:8px; font-size:11px; color:#aaa;">Platforms added: <span id="mcCount">0</span></div>
   <button onclick="toggleMapCreator()" style="position:absolute;top:10px;right:14px;background:none;border:none;color:#aaa;font-size:20px;cursor:pointer;line-height:1;">✕</button>
+</div>
+
+<!-- In-game chat widget (shown only during online sessions) -->
+<div id="onlineChat" style="display:none; position:fixed; bottom:10px; left:10px; width:240px; flex-direction:column; gap:4px; z-index:500; pointer-events:auto;">
+  <div id="chatMessages" style="height:120px; overflow-y:auto; background:rgba(0,0,0,0.55); border:1px solid rgba(100,180,255,0.25); border-radius:7px 7px 0 0; padding:6px 8px; display:flex; flex-direction:column; gap:2px; scroll-behavior:smooth;"></div>
+  <div style="display:flex; gap:4px;">
+    <input id="chatInput" type="text" maxlength="80" placeholder="Chat… (Enter to send)" autocomplete="off"
+      onkeydown="onChatKey(event)"
+      style="flex:1; padding:5px 8px; background:rgba(0,0,0,0.65); border:1px solid rgba(100,180,255,0.3); border-radius:0 0 0 7px; color:#dde; font-size:0.72rem; outline:none;">
+    <button onclick="sendChatMsg()" style="padding:5px 10px; background:rgba(40,100,200,0.7); border:1px solid rgba(100,180,255,0.4); border-radius:0 0 7px 0; color:#cce; font-size:0.72rem; cursor:pointer;">Send</button>
+  </div>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"></script>
