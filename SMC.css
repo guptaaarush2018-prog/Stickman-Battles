@@ -973,3 +973,5 @@ input[type="color"] {
 .ach-title { font-size: 0.82rem; font-weight: 700; color: #ffcc00; }
 .ach-locked .ach-title { color: #888; }
 .ach-desc  { font-size: 0.70rem; color: #aaa; line-height: 1.3; }
+.ach-hint  { font-size: 0.68rem; color: #7799bb; font-style: italic; line-height: 1.3; margin-top: 2px; }
+@keyframes achSlideIn { from { transform: translateX(120%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
