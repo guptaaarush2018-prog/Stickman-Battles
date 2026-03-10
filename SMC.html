@@ -647,25 +647,80 @@
 </div>
 
 <!-- Map Creator panel -->
-<div id="mapCreatorPanel" style="display:none; position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); background:#1a1a2e; border:2px solid #6644ff; border-radius:12px; padding:20px; z-index:500; min-width:360px; color:#fff; font-family:Arial,sans-serif;">
-  <h3 style="margin:0 0 12px; color:#8866ff;">Map Creator</h3>
-  <div style="margin-bottom:8px; display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-    <label style="font-size:12px;">X:</label>
-    <input id="mcX" type="number" value="200" style="width:64px;background:#0a0a1e;color:#fff;border:1px solid #444;padding:3px 5px;border-radius:4px;">
-    <label style="font-size:12px;">Y:</label>
-    <input id="mcY" type="number" value="300" style="width:64px;background:#0a0a1e;color:#fff;border:1px solid #444;padding:3px 5px;border-radius:4px;">
-    <label style="font-size:12px;">W:</label>
-    <input id="mcW" type="number" value="150" style="width:64px;background:#0a0a1e;color:#fff;border:1px solid #444;padding:3px 5px;border-radius:4px;">
-  </div>
-  <div style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px;">
-    <button class="btn" onclick="addCreatorPlatform()" style="font-size:11px;padding:4px 10px;">Add Platform</button>
-    <button class="btn" onclick="clearCreatorPlatforms()" style="font-size:11px;padding:4px 10px;">Clear All</button>
-    <button class="btn" onclick="exportCreatorMap()" style="font-size:11px;padding:4px 10px;">Export JSON</button>
-    <button class="btn" onclick="importCreatorMap()" style="font-size:11px;padding:4px 10px;">Import JSON</button>
-  </div>
-  <textarea id="mcJSON" rows="4" style="width:100%;box-sizing:border-box;background:#0a0a1e;color:#88ff88;border:1px solid #444;padding:6px;font-size:11px;font-family:monospace;border-radius:4px;" placeholder="Paste exported JSON here to import..."></textarea>
-  <div style="margin-top:8px; font-size:11px; color:#aaa;">Platforms added: <span id="mcCount">0</span></div>
+<div id="mapCreatorPanel" style="display:none; position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); background:#1a1a2e; border:2px solid #6644ff; border-radius:12px; padding:20px; z-index:500; min-width:400px; max-height:90vh; overflow-y:auto; color:#fff; font-family:Arial,sans-serif;">
   <button onclick="toggleMapCreator()" style="position:absolute;top:10px;right:14px;background:none;border:none;color:#aaa;font-size:20px;cursor:pointer;line-height:1;">✕</button>
+  <h3 style="margin:0 0 10px; color:#8866ff;">Map Creator</h3>
+  <p style="font-size:10px;color:#998;margin:0 0 8px;">Drag platforms on the canvas while editor is open. Click to select.</p>
+
+  <!-- Platform Properties -->
+  <div style="background:rgba(255,255,255,0.05);border-radius:8px;padding:10px;margin-bottom:10px;">
+    <div style="font-size:11px;color:#88aaff;margin-bottom:6px;font-weight:bold;">Platform Properties</div>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:5px;margin-bottom:6px;">
+      <div><label style="font-size:10px;color:#aaa;">X</label><br>
+        <input id="mcX" type="number" value="200" style="width:100%;box-sizing:border-box;background:#0a0a1e;color:#fff;border:1px solid #444;padding:3px 5px;border-radius:4px;font-size:11px;"></div>
+      <div><label style="font-size:10px;color:#aaa;">Y</label><br>
+        <input id="mcY" type="number" value="300" style="width:100%;box-sizing:border-box;background:#0a0a1e;color:#fff;border:1px solid #444;padding:3px 5px;border-radius:4px;font-size:11px;"></div>
+      <div><label style="font-size:10px;color:#aaa;">Width</label><br>
+        <input id="mcW" type="number" value="150" style="width:100%;box-sizing:border-box;background:#0a0a1e;color:#fff;border:1px solid #444;padding:3px 5px;border-radius:4px;font-size:11px;"></div>
+      <div><label style="font-size:10px;color:#aaa;">Height</label><br>
+        <input id="mcH" type="number" value="14" style="width:100%;box-sizing:border-box;background:#0a0a1e;color:#fff;border:1px solid #444;padding:3px 5px;border-radius:4px;font-size:11px;"></div>
+      <div><label style="font-size:10px;color:#aaa;">Color</label><br>
+        <input id="mcColor" type="color" value="#888888" style="width:100%;height:26px;border-radius:4px;border:1px solid #444;background:#0a0a1e;cursor:pointer;padding:1px;"></div>
+    </div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:6px;">
+      <label style="font-size:11px;display:flex;align-items:center;gap:4px;cursor:pointer;">
+        <input id="mcFloor" type="checkbox"> Floor (solid from above only)</label>
+      <label style="font-size:11px;display:flex;align-items:center;gap:4px;cursor:pointer;">
+        <input id="mcBouncy" type="checkbox"> Bouncy</label>
+    </div>
+    <label style="font-size:11px;display:flex;align-items:center;gap:4px;cursor:pointer;margin-bottom:4px;">
+      <input id="mcMoving" type="checkbox" onchange="document.getElementById('mcMovingOpts').style.display=this.checked?'flex':'none'"> Moving platform
+    </label>
+    <div id="mcMovingOpts" style="display:none;gap:6px;align-items:center;flex-wrap:wrap;margin-top:4px;">
+      <label style="font-size:10px;color:#aaa;">Osc X amplitude:</label>
+      <input id="mcOscX" type="number" value="60" style="width:54px;background:#0a0a1e;color:#fff;border:1px solid #444;padding:2px 4px;border-radius:4px;font-size:10px;">
+      <label style="font-size:10px;color:#aaa;">Speed:</label>
+      <input id="mcOscSpd" type="number" value="0.02" step="0.005" style="width:54px;background:#0a0a1e;color:#fff;border:1px solid #444;padding:2px 4px;border-radius:4px;font-size:10px;">
+    </div>
+  </div>
+
+  <!-- Action buttons -->
+  <div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:10px;">
+    <button class="btn" onclick="addCreatorPlatform()" style="font-size:11px;padding:4px 10px;">+ Add</button>
+    <button class="btn" onclick="undoLastPlatform()" style="font-size:11px;padding:4px 10px;">↩ Undo</button>
+    <button class="btn" onclick="clearCreatorPlatforms()" style="font-size:11px;padding:4px 10px;">Clear Added</button>
+    <button class="btn" onclick="clearAllPlatforms()" style="font-size:11px;padding:4px 10px;color:#ff8888;">Clear ALL</button>
+    <button class="btn" onclick="exportCreatorMap()" style="font-size:11px;padding:4px 10px;">Export</button>
+    <button class="btn" onclick="importCreatorMap()" style="font-size:11px;padding:4px 10px;">Import</button>
+  </div>
+  <div style="font-size:11px;color:#aaa;margin-bottom:8px;">Platforms added: <span id="mcCount">0</span></div>
+  <textarea id="mcJSON" rows="3" style="width:100%;box-sizing:border-box;background:#0a0a1e;color:#88ff88;border:1px solid #444;padding:6px;font-size:10px;font-family:monospace;border-radius:4px;" placeholder="Paste exported JSON here to import…"></textarea>
+
+  <!-- Weapon Creator -->
+  <div style="background:rgba(255,200,50,0.06);border:1px solid rgba(255,200,50,0.2);border-radius:8px;padding:10px;margin-top:12px;">
+    <div style="font-size:11px;color:#ffcc44;margin-bottom:6px;font-weight:bold;">⚔ Weapon Creator</div>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:5px;margin-bottom:6px;">
+      <div style="grid-column:1/-1"><label style="font-size:10px;color:#aaa;">Name</label><br>
+        <input id="wcName" type="text" value="Custom" style="width:100%;box-sizing:border-box;background:#0a0a1e;color:#fff;border:1px solid #444;padding:3px 5px;border-radius:4px;font-size:11px;"></div>
+      <div><label style="font-size:10px;color:#aaa;">Damage</label><br>
+        <input id="wcDmg" type="number" value="12" style="width:100%;box-sizing:border-box;background:#0a0a1e;color:#fff;border:1px solid #444;padding:3px;border-radius:4px;font-size:11px;"></div>
+      <div><label style="font-size:10px;color:#aaa;">Range (px)</label><br>
+        <input id="wcRange" type="number" value="65" style="width:100%;box-sizing:border-box;background:#0a0a1e;color:#fff;border:1px solid #444;padding:3px;border-radius:4px;font-size:11px;"></div>
+      <div><label style="font-size:10px;color:#aaa;">Cooldown (f)</label><br>
+        <input id="wcCd" type="number" value="30" style="width:100%;box-sizing:border-box;background:#0a0a1e;color:#fff;border:1px solid #444;padding:3px;border-radius:4px;font-size:11px;"></div>
+      <div><label style="font-size:10px;color:#aaa;">Knockback</label><br>
+        <input id="wcKb" type="number" value="8" style="width:100%;box-sizing:border-box;background:#0a0a1e;color:#fff;border:1px solid #444;padding:3px;border-radius:4px;font-size:11px;"></div>
+      <div><label style="font-size:10px;color:#aaa;">Abil. Dmg</label><br>
+        <input id="wcAbilDmg" type="number" value="20" style="width:100%;box-sizing:border-box;background:#0a0a1e;color:#fff;border:1px solid #444;padding:3px;border-radius:4px;font-size:11px;"></div>
+      <div><label style="font-size:10px;color:#aaa;">Type</label><br>
+        <select id="wcType" style="width:100%;background:#0a0a1e;color:#fff;border:1px solid #444;padding:3px;border-radius:4px;font-size:11px;">
+          <option value="melee">Melee</option>
+          <option value="ranged">Ranged</option>
+        </select></div>
+    </div>
+    <button class="btn" onclick="createCustomWeapon()" style="font-size:11px;padding:4px 12px;">Create Weapon</button>
+    <span id="wcStatus" style="font-size:10px;color:#88ff88;margin-left:8px;"></span>
+  </div>
 </div>
 
 <!-- In-game chat widget (shown only during online sessions) -->
@@ -679,8 +734,33 @@
   </div>
 </div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"></script>
-<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
-<script src="SMC.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"></script>
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+  <!-- Global state, canvas setup -->
+  <script src="js/smc-globals.js"></script>
+  <!-- Sound system -->
+  <script src="js/smc-audio.js"></script>
+  <!-- Achievement system -->
+  <script src="js/smc-achievements.js"></script>
+  <!-- Arena, weapon, class data -->
+  <script src="js/smc-data.js"></script>
+  <!-- Utilities, particles, physics, ragdoll -->
+  <script src="js/smc-particles.js"></script>
+  <!-- Fighter base class -->
+  <script src="js/smc-fighter.js"></script>
+  <!-- Enemy NPCs, training mode -->
+  <script src="js/smc-enemies.js"></script>
+  <!-- Boss and True Form -->
+  <script src="js/smc-boss.js"></script>
+  <!-- Drawing, game state, HUD, visual effects -->
+  <script src="js/smc-drawing.js"></script>
+  <!-- Minigame systems -->
+  <script src="js/smc-minigames.js"></script>
+  <!-- Camera, main game loop, input -->
+  <script src="js/smc-loop.js"></script>
+  <!-- Menu UI, startGame, tutorial -->
+  <script src="js/smc-menu.js"></script>
+  <!-- Network / online multiplayer -->
+  <script src="js/smc-network.js"></script>
 </body>
 </html>
