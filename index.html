@@ -111,6 +111,11 @@
     <h1 class="game-title">STICKMAN BATTLES</h1>
     <p class="game-subtitle">Local Multiplayer Platform Fighter</p>
 
+    <!-- TRUE FORM HINT — hidden once unlocked -->
+    <div id="trueFormHint" style="text-align:center;margin:4px 0 6px;font-size:0.72rem;color:#886699;letter-spacing:1px;opacity:0.8;">
+      &#128274; <em>A secret power lies dormant... beat the boss to uncover it.</em>
+    </div>
+
     <!-- MODE SELECTION -->
     <div>
       <p class="section-label">Game Mode</p>
@@ -147,9 +152,25 @@
         <div style="color:#88ccff; font-size:0.72rem; line-height:1.4;">
           🌐 <b>Cross-network play</b> — pick any room code, share it with your opponent. First to join is P1.
         </div>
+        <!-- Room type toggle: Public vs Private -->
+        <div style="display:flex; gap:6px; align-items:center;">
+          <span style="color:#88ccff; font-size:0.75rem;">Room Type:</span>
+          <button id="roomTypePublicBtn" class="btn active" onclick="setRoomType('public')" style="font-size:0.70rem;padding:3px 10px;">🌍 Public</button>
+          <button id="roomTypePrivateBtn" class="btn" onclick="setRoomType('private')" style="font-size:0.70rem;padding:3px 10px;">🔒 Private</button>
+        </div>
         <div style="display:flex; gap:6px; align-items:center;">
           <label style="color:#88ccff; font-size:0.78rem; white-space:nowrap;">Room Code</label>
           <input id="onlineRoomCode" type="text" placeholder="e.g. FIGHT42" maxlength="20" style="flex:1; padding:4px 7px; background:rgba(0,0,0,0.4); border:1px solid rgba(100,180,255,0.4); border-radius:5px; color:#cce; font-size:0.75rem; text-transform:uppercase;">
+        </div>
+        <!-- Public room browser -->
+        <div id="publicRoomBrowser" style="display:flex; flex-direction:column; gap:4px;">
+          <div style="display:flex; gap:5px; align-items:center;">
+            <span style="color:#88ccff; font-size:0.72rem;">Public Rooms</span>
+            <button class="btn" onclick="refreshPublicRooms()" style="font-size:0.65rem;padding:2px 7px;">Refresh</button>
+          </div>
+          <div id="publicRoomList" style="max-height:90px; overflow-y:auto; background:rgba(0,0,0,0.3); border-radius:5px; padding:4px; font-size:0.70rem; color:#aab;">
+            <span style="color:#556;">No public rooms found. Refresh or create one!</span>
+          </div>
         </div>
         <!-- Game mode selector — only visible to the host (slot 1) after joining -->
         <div id="onlineGameModeRow" style="display:none; flex-direction:column; gap:4px;">
@@ -300,6 +321,10 @@
                 <input type="checkbox" id="settingPhaseFlash" checked onchange="updateSettings()">
                 <span>Phase Flash</span>
               </label>
+              <label class="setting-item">
+                <input type="checkbox" id="settingRagdoll" onchange="updateSettings()">
+                <span>Ragdoll Physics</span>
+              </label>
             </div>
           </div>
         </div>
@@ -316,15 +341,9 @@
           <button class="btn settings-toggle" onclick="showAchievementsModal()" style="color:#ffcc00;border-color:rgba(255,200,0,0.4);">🏆 Achievements</button>
           <button class="btn settings-toggle" onclick="document.getElementById('resetConfirmRow').style.display='block'" style="color:#ff8888;border-color:rgba(255,80,80,0.4);">Reset Progress</button>
         </div>
-        <!-- EXPERIMENTAL FEATURES -->
-        <div class="experimental-section">
-          <p class="exp-label">Experimental</p>
-          <div class="exp-row">
-            <input type="text" id="codeInput" class="code-input" placeholder="Beat the boss to unlock"
-              readonly style="cursor:default;opacity:0.75;">
-          </div>
-          <div id="codeMessage" class="code-message"></div>
-        </div>
+        <!-- codeInput / codeMessage kept for syncCodeInput() compatibility -->
+        <input type="text" id="codeInput" style="display:none" readonly>
+        <div id="codeMessage" class="code-message"></div>
       </div>
     </div>
 
@@ -755,6 +774,8 @@
   <script src="./js/smc-enemies.js"></script>
   <!-- Boss and True Form -->
   <script src="./js/smc-boss.js"></script>
+  <!-- Cinematic scripting system v2: cinScript, CinCam, CinFX, ground cracks -->
+  <script src="./js/smc-cinematics.js"></script>
   <!-- Drawing, game state, HUD, visual effects -->
   <script src="./js/smc-drawing.js"></script>
   <!-- Minigame systems -->
@@ -765,10 +786,43 @@
   <script src="./js/smc-menu.js"></script>
   <!-- Network / online multiplayer -->
   <script src="./js/smc-network.js"></script>
+  <!-- True Matter.js ragdoll system (optional, enabled via settings) -->
+  <script src="./js/smc-ragdoll.js"></script>
+  <!-- Developer debug toolkit (loaded last so all systems exist) -->
+  <script src="./js/smc-debug.js"></script>
 
   <!-- YouTube IFrame API for background music (HTTP/HTTPS only — skipped on file://) -->
   <div id="ytBossPlayer"    style="position:fixed;width:1px;height:1px;opacity:0;pointer-events:none;left:-9999px;top:-9999px;"></div>
   <div id="ytNormalPlayer"  style="position:fixed;width:1px;height:1px;opacity:0;pointer-events:none;left:-9999px;top:-9999px;"></div>
+  <!-- In-game console overlay (activated by typing GAMECONSOLE) -->
+  <div id="gameConsoleOverlay" style="display:none;position:fixed;bottom:0;left:0;right:0;height:260px;background:rgba(8,8,18,0.96);border-top:2px solid #3366ff;z-index:9999;font-family:'Courier New',monospace;flex-direction:column;">
+    <div style="display:flex;align-items:center;padding:4px 10px;background:rgba(20,30,80,0.95);border-bottom:1px solid #3366ff;">
+      <span style="color:#88aaff;font-size:0.78rem;font-weight:bold;flex:1;">&#9658; Stickman Clash Console</span>
+      <button onclick="closeGameConsole()" style="background:none;border:none;color:#ff5555;font-size:1rem;cursor:pointer;padding:0 6px;">&#x2715;</button>
+    </div>
+    <div id="gameConsoleLog" style="flex:1;overflow-y:auto;padding:6px 10px;font-size:0.75rem;color:#ccddff;line-height:1.5;"></div>
+    <div style="display:flex;align-items:center;padding:4px 8px;border-top:1px solid #334;gap:6px;">
+      <span style="color:#88aaff;font-size:0.8rem;">&#10148;</span>
+      <input id="gameConsoleInput" type="text" autocomplete="off" spellcheck="false"
+        style="flex:1;background:transparent;border:none;outline:none;color:#eef;font-family:'Courier New',monospace;font-size:0.8rem;"
+        placeholder="type a command... (HELP for list)"
+        onkeydown="if(event.key==='Enter'){gameConsoleRun();} if(event.key==='Escape'){closeGameConsole();}">
+    </div>
+  </div>
+
+  <script>
+    // Make console overlay use flex when shown
+    (function() {
+      const ov = document.getElementById('gameConsoleOverlay');
+      if (ov) { const orig = ov.style.display; Object.defineProperty(ov.style, '_shown', { get: () => ov.style.display !== 'none' }); }
+      // Patch openGameConsole to set flex display
+      document.addEventListener('DOMContentLoaded', function() {
+        const _origOpen = window.openGameConsole;
+        // Will be overridden after smc-debug.js loads; display fix applied there
+      });
+    })();
+  </script>
+
   <script>
     if (location.protocol !== 'file:') {
       const _ytScript = document.createElement('script');
