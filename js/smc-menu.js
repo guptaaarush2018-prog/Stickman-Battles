@@ -798,6 +798,7 @@ function _startGameCore() {
   yetiCooldown       = 0;
   bossBeams          = [];
   bossSpikes         = [];
+  if (typeof resetBossWarnings === 'function') resetBossWarnings();
   trainingDummies    = [];
   bossDialogue       = { text: '', timer: 0 };
   backstagePortals   = [];

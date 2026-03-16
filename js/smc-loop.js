@@ -35,6 +35,17 @@ function updateCamera() {
     targetZoom    = Math.max(targetZoom, hitZoom);
   }
 
+  // Dynamic combat camera: subtle zoom-in when boss is actively attacking
+  if (!cinematicCamOverride && gameRunning) {
+    const attackingBoss = players.find(p => p.isBoss && p.attackTimer > 0 && p.health > 0);
+    if (attackingBoss) {
+      targetZoom = Math.max(targetZoom, 1.08);
+      // Bias camera position slightly toward the boss during their attack
+      targetX = targetX * 0.6 + attackingBoss.cx() * 0.4;
+      targetY = targetY * 0.6 + attackingBoss.cy() * 0.4;
+    }
+  }
+
   camZoomTarget = targetZoom;
   const dx = targetX - camXTarget, dy = targetY - camYTarget;
   if (Math.hypot(dx, dy) > CAMERA_DEAD_ZONE) {
@@ -250,7 +261,10 @@ function gameLoop() {
           const beamTargets = trainingMode ? players : players.filter(p => !p.isBoss);
           for (const p of beamTargets) {
             if (p.health <= 0 || p.invincible > 0) continue;
-            if (Math.abs(p.cx() - b.x) < 24) dealDamage(boss || players[1], p, 12, 5);
+            // Skip damage if player is inside a safe zone
+            const inSafe = bossMetSafeZones.some(sz =>
+              Math.hypot(p.cx() - sz.x, (p.y + p.h * 0.5) - sz.y) < sz.r);
+            if (!inSafe && Math.abs(p.cx() - b.x) < 24) dealDamage(boss || players[1], p, 8, 5);
           }
         }
       }
@@ -279,7 +293,7 @@ function gameLoop() {
         for (const p of spikeTargets) {
           if (p.health <= 0 || p.invincible > 0) continue;
           if (Math.abs(p.cx() - sp.x) < 9 && p.y + p.h > spikeTopY) {
-            dealDamage(bossRef || players.find(q => q.isBoss) || players[1], p, 20, 14);
+            dealDamage(bossRef || players.find(q => q.isBoss) || players[1], p, 14, 14);
             // Bounce player upward so they can escape
             if (p.vy >= 0) {
               p.vy = -20;
@@ -292,6 +306,9 @@ function gameLoop() {
     bossSpikes = bossSpikes.filter(sp => !sp.done);
     drawBossSpikes();
     if (bossDeathScene) updateBossDeathScene();
+    // Telegraph system: pending attacks, stagger, desperation, warnings draw
+    updateBossPendingAttacks();
+    drawBossWarnings();
   }
 
   // ---------- Phase: updatePhysics/updateCombat (projectiles, minions, players) ----------
@@ -333,6 +350,7 @@ function gameLoop() {
     updateTFChainSlam();
     updateTFGraspSlam();
     updateTFShockwaves();
+    updateTFPendingAttacks();
     // Gravity timer: auto-restore after 10 seconds
     if (tfGravityInverted && tfGravityTimer > 0) {
       tfGravityTimer--;
@@ -364,8 +382,10 @@ function gameLoop() {
     drawTFMeteorCrash();
     drawTFClones();
     drawTFShockwaves();
+    drawBossWarnings();
   }
   drawPhaseTransitionRings();
+  drawCinematicWorldEffects(); // ground cracks + world-space cinematic fx
   checkWeaponSparks();
 
   // Ability activation ring flash
@@ -529,8 +549,10 @@ const keyHeldFrames = {};   // key → frames held continuously
 const SCROLL_BLOCK = new Set([' ', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 's', 'S', '/']);
 
 document.addEventListener('keydown', e => {
-  // Don't pause when typing in chat
-  const chatFocused = document.activeElement && document.activeElement.id === 'chatInput';
+  // Don't intercept keys when typing in chat or the game console input
+  const chatFocused    = document.activeElement && document.activeElement.id === 'chatInput';
+  const consoleFocused = document.activeElement && document.activeElement.id === 'gameConsoleInput';
+  if (consoleFocused) return; // let console input receive all keystrokes unmodified
   if (!chatFocused && (e.key === 'Escape' || e.key === 'p' || e.key === 'P')) { pauseGame(); return; }
   // Cheat code: type TRUEFORM anywhere in menu to unlock True Form
   // GAMECONSOLE works any time (menu or in-game)

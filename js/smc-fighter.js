@@ -1488,11 +1488,11 @@ class Fighter {
       const floorPl = currentArena.platforms.find(p => p.isFloor);
       if (floorPl && floorPl.isFloorDisabled && this.y + this.h > GAME_H - 140) {
         // Void floor active — flee upward toward nearest platform
-        let nearestX = GAME_W / 2, nearestY = 0, nearestDist = Infinity;
+        let nearestX = GAME_W / 2, nearestDist = Infinity;
         for (const pl of currentArena.platforms) {
           if (pl.isFloor) continue;
           const pdx3 = Math.abs(pl.x + pl.w / 2 - this.cx());
-          if (pdx3 < nearestDist) { nearestDist = pdx3; nearestX = pl.x + pl.w / 2; nearestY = pl.y; }
+          if (pdx3 < nearestDist) { nearestDist = pdx3; nearestX = pl.x + pl.w / 2; }
         }
         this.vx = nearestX > this.cx() ? spd * 1.8 : -spd * 1.8;
         if (this.onGround && Math.random() < 0.25) this.vy = -20;
@@ -1516,6 +1516,26 @@ class Fighter {
 
     // Emergency super: if critically low health and super is ready, fire immediately
     if (this.health < 40 && this.superReady) { this.useSuper(t); }
+
+    // ---- HARD FREEZE FAILSAFE: force chase if bot hasn't moved in 1.5s ----
+    // Guards against edge cases where all state-machine branches return without moving.
+    if (!this.isBoss) {
+      this._absoluteIdleTimer = (this._absoluteIdleTimer || 0);
+      const isMoving = Math.abs(this.vx) > 0.8 || !this.onGround;
+      if (isMoving) {
+        this._absoluteIdleTimer = 0;
+      } else {
+        this._absoluteIdleTimer++;
+        if (this._absoluteIdleTimer > 8) { // 8 AI ticks × 15 frames = ~120 frames = ~2s
+          this._absoluteIdleTimer = 0;
+          // Force move directly toward target
+          const forceDx = t.cx() - this.cx();
+          this.vx = Math.sign(forceDx) * spd * 1.2;
+          if (this.onGround) this.vy = -17;
+          return; // skip utility AI this tick
+        }
+      }
+    }
 
     // ---- UTILITY AI: score-based action selection + raycast hazard detection ----
     // Replaces the old state machine; handles movement, combat, dodge, and reaction lag.

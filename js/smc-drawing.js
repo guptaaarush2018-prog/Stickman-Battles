@@ -80,6 +80,30 @@ function drawVoidArena() {
   ctx.globalAlpha = 1;
   ctx.restore();
 
+  // Draw lava on floor if boss floor hazard is active (same as creator arena)
+  if (bossFloorState === 'hazard' && bossFloorType === 'lava') {
+    const ly = 460;
+    const lg = ctx.createLinearGradient(0, ly, 0, GAME_H);
+    lg.addColorStop(0,   '#ff6600');
+    lg.addColorStop(0.3, '#cc2200');
+    lg.addColorStop(1,   '#880000');
+    ctx.fillStyle = lg;
+    ctx.beginPath();
+    ctx.moveTo(0, ly);
+    for (let x = 0; x <= GAME_W; x += 18) {
+      ctx.lineTo(x, ly + Math.sin(x * 0.055 + frameCount * 0.07) * 7);
+    }
+    ctx.lineTo(GAME_W, GAME_H);
+    ctx.lineTo(0, GAME_H);
+    ctx.closePath();
+    ctx.fill();
+    ctx.shadowColor = '#ff4400';
+    ctx.shadowBlur  = 20;
+    ctx.fillStyle   = 'rgba(255,80,0,0.22)';
+    ctx.fillRect(0, ly - 10, GAME_W, 12);
+    ctx.shadowBlur  = 0;
+  }
+
   // When floor is removed: orange lava rises from below
   if (tfFloorRemoved) {
     ctx.globalAlpha = 1;
@@ -605,16 +629,22 @@ function endGame() {
   document.getElementById('hud').style.display = 'none';
   const isBossModeEnd = gameMode === 'boss' || gameMode === 'trueform';
   const alive  = players.filter(p => p.lives > 0 && !(isBossModeEnd && p.isBoss));
-  const bossDefeated = isBossModeEnd && alive.length > 0 && players.some(p => p.isBoss && p.health <= 0);
-  const winner = alive.length === 1 ? alive[0]
-               : (alive.length === 0 && isBossModeEnd) ? players.find(p => p.isBoss)
+  // Boss death scene removes human players from the array — check health directly to detect victory
+  const bossEntity   = players.find(p => p.isBoss);
+  const bossDefeated = isBossModeEnd && bossEntity && bossEntity.health <= 0;
+  const winner = bossDefeated                    ? null   // human win — handled in bossDefeated block
+               : alive.length === 1              ? alive[0]
+               : (alive.length === 0 && isBossModeEnd) ? bossEntity
                : null;
 
   // --- Achievement checks on match end ---
   // Skip all achievements/progression if any non-boss player used a custom weapon
   const _anyCustomWeapon = players.some(p => !p.isBoss && p.weapon && p.weapon._isCustom);
   // For 2P boss co-op win, treat any survivor as the "winner" for achievements
-  const achievWinner = _anyCustomWeapon ? null : (winner || (bossDefeated ? alive[0] : null));
+  // alive may be empty after boss death scene (startBossDeathScene strips human players)
+  // so use a sentinel achiever object for boss-defeat achievements if no human ref available
+  const _bossDefeatedAchiever = bossDefeated ? (alive[0] || { isBoss: false, health: 1, maxHealth: 1, weaponKey: null, kills: 0 }) : null;
+  const achievWinner = _anyCustomWeapon ? null : (winner || _bossDefeatedAchiever);
   if (achievWinner && !achievWinner.isBoss) {
     _achStats.totalWins++;
     _achStats.winStreak++;
@@ -1123,6 +1153,16 @@ function drawCinematicOverlay() {
     ctx.fillText(activeCinematic._phaseLabel.text, cw / 2, ch / 2);
     ctx.shadowBlur  = 0;
   }
+  // Screen flash (from CinFX.flash)
+  if (cinScreenFlash && cinScreenFlash.timer > 0) {
+    const fa = (cinScreenFlash.timer / cinScreenFlash.maxTimer) * cinScreenFlash.alpha;
+    ctx.globalAlpha = Math.max(0, fa);
+    ctx.fillStyle   = cinScreenFlash.color || '#ffffff';
+    ctx.fillRect(0, 0, cw, ch);
+    cinScreenFlash.timer--;
+    if (cinScreenFlash.timer <= 0) cinScreenFlash = null;
+  }
+
   ctx.globalAlpha = 1;
 }
 

@@ -1092,7 +1092,7 @@ const WEAPONS = {
   },
   gauntlet: {
     // Boss-only weapon. Heavy hitting melee, massive void slam ability.
-    name: 'Gauntlet', damage: 18, range: 44, cooldown: 22,
+    name: 'Gauntlet', damage: 13, range: 30, cooldown: 38,
     kb: 18,            abilityCooldown: 160, type: 'melee', color: '#9900ee',
     contactDmgMult: 0.55,
     abilityName: 'Void Slam',
@@ -1102,7 +1102,7 @@ const WEAPONS = {
       spawnRing(user.cx(), user.cy());
       for (const p of players) {
         if (p === user || p.health <= 0) continue;
-        if (dist(user, p) < 165) dealDamage(user, p, 30, 40);
+        if (dist(user, p) < 165) dealDamage(user, p, 22, 40);
       }
       // Also hit training dummies
       for (const d of trainingDummies) {

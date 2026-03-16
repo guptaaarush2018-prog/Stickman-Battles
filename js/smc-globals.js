@@ -107,6 +107,18 @@ let tfChainSlam        = null; // { stage:0-3, timer, target }
 let tfGraspSlam        = null; // { timer }
 let tfShockwaves       = [];   // { x, y, r, maxR, timer, maxTimer, boss, hit:Set }
 
+// ── Boss telegraph / warning system ──────────────────────────────────────────
+// Visual warning indicators shown before attacks land (give player time to dodge)
+let bossWarnings        = [];   // { type:'circle'|'arc'|'cone', x, y, r, color, timer, maxTimer, label, safeZone, facing }
+let bossMetSafeZones    = [];   // safe zones during meteor storm { x, y, r, timer, maxTimer }
+// Stagger: boss takes 120+ damage in 3s window → stunned for 2.5s
+let bossStaggerTimer    = 0;    // frames remaining in stagger
+let bossStaggerDmg      = 0;    // accumulated damage in current window
+let bossStaggerDecay    = 0;    // decay timer; when 0 accumulator resets
+// Desperation mode: boss health < 25% → faster, more intense
+let bossDesperationMode  = false;
+let bossDesperationFlash = 0;   // visual flash timer on activate
+
 // ============================================================
 // SECRET LETTER HUNT
 // ============================================================
@@ -164,6 +176,8 @@ let lightningBolts   = [];    // { x, y, timer, segments } — Thor perk visual 
 let backstagePortals = [];    // {x,y,type,phase,timer,radius,maxRadius,codeChars,done}
 let phaseTransitionRings = []; // expanding ring effects on phase change
 // ---- Cinematic System ----
+let cinGroundCracks  = [];    // world-space crack effects (managed by smc-cinematics.js)
+let cinScreenFlash   = null;  // screen-space flash { color, alpha, timer, maxTimer }
 let activeCinematic      = null;  // active cinematic sequence or null
 let slowMotion           = 1.0;   // physics time scale (1=normal, 0=fully frozen)
 let cinematicCamOverride = false; // when true, camera uses cinematic focus targets

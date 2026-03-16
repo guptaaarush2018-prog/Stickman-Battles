@@ -175,8 +175,8 @@ function openDebugMenu() {
       }
     }],
     ['Kill All Bots',      () => {
-      for (const p of [...players, ...trainingDummies]) {
-        if (p.isAI && !p.godmode) p.health = 0;
+      for (const p of [...players, ...(minions||[]), ...(trainingDummies||[])]) {
+        if (p.isAI && !p.godmode && !p._godmode) p.health = 0;
       }
     }],
     ['Refill All HP',      () => {
@@ -377,11 +377,14 @@ function _consoleExec(raw) {
   if (cmd.startsWith('KILL')) {
     const who = sub || 'all';
     if (typeof players === 'undefined') { _consoleErr('No game running.'); return; }
-    const _kill = (p) => { if (!p.isBoss || who === 'boss' || who === 'all') p.health = 0; };
     if (who === 'p1' || who === '1') { if (players[0]) players[0].health = 0; }
     else if (who === 'p2' || who === '2') { if (players[1]) players[1].health = 0; }
     else if (who === 'boss') { players.forEach(p => { if (p.isBoss) p.health = 0; }); }
-    else { players.filter(p => !p.isBoss).forEach(p => p.health = 0); }
+    else {
+      // kill all: players + minions + training dummies (including boss)
+      const all = [...players, ...(minions||[]), ...(trainingDummies||[])];
+      all.forEach(p => { if (!p.godmode && !p._godmode) p.health = 0; });
+    }
     _consoleOk('Killed ' + who);
     return;
   }

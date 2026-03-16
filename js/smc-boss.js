@@ -54,6 +54,11 @@ class Boss extends Fighter {
     this._gravPulseCd     = 0;   // Gravity Pulse
     this._stormCd         = 0;   // Meteor Storm
     this._groundSlamCd    = 0;   // Ground Slam
+    // Pending (deferred) attacks — set warning, delay damage by N frames
+    this._pendingGroundSlam = null; // { timer, x, y }
+    this._pendingGravPulse  = null; // { timer }
+    this._prevHealth        = 3000; // for stagger accumulation tracking
+    this._cinematicFired    = new Set(); // HP-threshold mid-fight cinematics already triggered
   }
 
   getPhase() {
@@ -88,6 +93,7 @@ class Boss extends Fighter {
     if (activeCinematic) return; // freeze during cinematic moments
     if (this.aiReact > 0) { this.aiReact--; return; }
     if (this.ragdollTimer > 0 || this.stunTimer > 0) return;
+    if (bossStaggerTimer > 0) return; // stunned — vulnerability window
     // Post-special pause: boss moves but doesn't attack for 1.5s after specials
     if (this.postSpecialPause > 0) this.postSpecialPause--;
     const canAct = this.postSpecialPause <= 0;
@@ -112,6 +118,28 @@ class Boss extends Fighter {
       this.postSpecialPause = Math.max(this.postSpecialPause, 8); // 8 ticks = 120 frames = 2s cinematic pause
       triggerPhaseTransition(this, phase);
     }
+
+    // ── Mid-fight HP cinematics ───────────────────────────────
+    const _hpPct = this.health / this.maxHealth;
+    if (!this._cinematicFired.has('75') && _hpPct <= 0.75) {
+      this._cinematicFired.add('75');
+      this.postSpecialPause = Math.max(this.postSpecialPause, 14);
+      startCinematic(_makeBossWarning75Cinematic(this));
+      return;
+    }
+    if (!this._cinematicFired.has('40') && _hpPct <= 0.40) {
+      this._cinematicFired.add('40');
+      this.postSpecialPause = Math.max(this.postSpecialPause, 16);
+      startCinematic(_makeBossRage40Cinematic(this));
+      return;
+    }
+    if (!this._cinematicFired.has('10') && _hpPct <= 0.10) {
+      this._cinematicFired.add('10');
+      this.postSpecialPause = Math.max(this.postSpecialPause, 14);
+      startCinematic(_makeBossDesp10Cinematic(this));
+      return;
+    }
+
     // Phase-based stats — hyper aggressive, always pressing attack
     const spd     = phase === 3 ? 6.8 : phase === 2 ? 5.8 : 5.0;
     const atkFreq = phase === 3 ? 0.95 : phase === 2 ? 0.80 : 0.60;
@@ -373,50 +401,35 @@ class Boss extends Fighter {
     const playerStill = this._stillTimer > 8;
     const fleeing     = this._runAwayTicks > 5;
 
-    // ── Close range (< 130 px): Ground Slam ──────────────────
-    if (d < 130 && this._groundSlamCd <= 0) {
+    // ── Close range (< 130 px): Ground Slam — DEFERRED with telegraph ────────
+    if (d < 130 && this._groundSlamCd <= 0 && !this._pendingGroundSlam) {
       this._groundSlamCd = Math.ceil(18 * cdScale);
-      // AOE burst: damage + knockback all nearby players
-      screenShake = Math.max(screenShake, 20);
-      spawnParticles(this.cx(), this.y + this.h, '#cc00ee', 30);
-      spawnParticles(this.cx(), this.y + this.h, '#ffffff', 14);
-      for (const p of players) {
-        if (p.isBoss || p.health <= 0) continue;
-        const dd = dist(this, p);
-        if (dd < 160) {
-          dealDamage(this, p, 28, 14);
-          const rDir = p.cx() > this.cx() ? 1 : -1;
-          p.vx += rDir * 16;
-          p.vy  = Math.min(p.vy, -10);
-        }
-      }
-      // Ring of spikes around impact point
+      // Telegraph: pulsing red AOE circle + spike floor markers (45 frames ≈ 0.75s)
+      const slamX = this.cx(), slamY = this.y + this.h;
+      bossWarnings.push({ type: 'circle', x: slamX, y: slamY, r: 160,
+        color: '#ff2200', timer: 45, maxTimer: 45, label: 'SLAM!' });
+      // Show spike warning dots on floor ahead of time
       for (let i = 0; i < 6; i++) {
-        const sx = clamp(this.cx() + (i - 2.5) * 55, 20, 880);
-        bossSpikes.push({ x: sx, maxH: 70 + Math.random() * 40, h: 0, phase: 'rising', stayTimer: 0, done: false });
+        const sx = clamp(slamX + (i - 2.5) * 55, 20, 880);
+        bossWarnings.push({ type: 'spike_warn', x: sx, y: 460, r: 12,
+          color: '#ff6600', timer: 45, maxTimer: 45 });
       }
+      this._pendingGroundSlam = { timer: 45, x: slamX, y: slamY };
       showBossDialogue(randChoice(['SHATTER!', 'The ground breaks!', 'SLAM!', 'Feel the impact!']), 150);
       if (typeof directorAddIntensity === 'function') directorAddIntensity(0.15);
       return true;
     }
 
-    // ── Medium range (130–300 px): Gravity Pulse ─────────────
-    if (d >= 80 && d < 320 && this._gravPulseCd <= 0) {
+    // ── Medium range (130–300 px): Gravity Pulse — DEFERRED with telegraph ───
+    if (d >= 80 && d < 320 && this._gravPulseCd <= 0 && !this._pendingGravPulse) {
       this._gravPulseCd = Math.ceil(28 * cdScale);
-      screenShake = Math.max(screenShake, 18);
-      spawnParticles(this.cx(), this.cy(), '#9900cc', 28);
-      spawnParticles(this.cx(), this.cy(), '#cc66ff', 14);
-      for (const p of players) {
-        if (p.isBoss || p.health <= 0) continue;
-        const ddx = this.cx() - p.cx();
-        const ddy = (this.y + this.h * 0.5) - (p.y + p.h * 0.5);
-        const dd  = Math.hypot(ddx, ddy);
-        if (dd < 350 && dd > 1) {
-          const pull = 22 * (1 - dd / 350);
-          p.vx = (ddx / dd) * pull;
-          p.vy = (ddy / dd) * pull * 0.5 - 5;
-        }
-      }
+      // Telegraph: expanding purple pull-radius ring (40 frames ≈ 0.67s)
+      bossWarnings.push({ type: 'circle', x: this.cx(), y: this.cy(), r: 350,
+        color: '#9900cc', timer: 40, maxTimer: 40, label: 'GRAVITY PULL!' });
+      // Inner ring at boss to show pull origin
+      bossWarnings.push({ type: 'circle', x: this.cx(), y: this.cy(), r: 60,
+        color: '#cc66ff', timer: 40, maxTimer: 40 });
+      this._pendingGravPulse = { timer: 40, edge: false };
       showBossDialogue(randChoice(['Come closer.', 'You cannot run.', 'GRAVITY PULSE!', 'The void calls.']), 180);
       if (typeof directorAddIntensity === 'function') directorAddIntensity(0.14);
       return true;
@@ -426,9 +439,22 @@ class Boss extends Fighter {
     if ((d >= 250 || fleeing) && phase >= 2 && this._stormCd <= 0) {
       this._stormCd = Math.ceil(32 * cdScale);
       const count = phase === 3 ? 8 : 5;
+      const safeCount = phase === 3 ? 1 : 2;
+      // Pick random safe zone positions that don't overlap beams
+      const safePositions = [];
+      for (let s = 0; s < safeCount; s++) {
+        safePositions.push(120 + Math.random() * (GAME_W - 240));
+      }
       for (let i = 0; i < count; i++) {
-        const bx = 60 + Math.random() * (GAME_W - 120);
+        let bx;
+        // Avoid placing beams on safe zones
+        do { bx = 60 + Math.random() * (GAME_W - 120); }
+        while (safePositions.some(sx => Math.abs(bx - sx) < 80));
         bossBeams.push({ x: bx, warningTimer: 240, activeTimer: 0, phase: 'warning', done: false });
+      }
+      // Register safe zones so beam damage is skipped inside them
+      for (const sx of safePositions) {
+        bossMetSafeZones.push({ x: sx, y: 380, r: 70, timer: 240 + 110, maxTimer: 240 + 110 });
       }
       screenShake = Math.max(screenShake, 14);
       showBossDialogue(randChoice(['METEOR STORM!', 'Nowhere is safe.', 'Rain of destruction!', 'JUDGMENT FALLS!']), 220);
@@ -444,17 +470,12 @@ class Boss extends Fighter {
       return true;
     }
 
-    // ── Situational: player at edge → Gravity Pulse ──────────
-    if (playerEdge && this._gravPulseCd <= 0) {
+    // ── Situational: player at edge → Gravity Pulse (deferred) ──────────────
+    if (playerEdge && this._gravPulseCd <= 0 && !this._pendingGravPulse) {
       this._gravPulseCd = Math.ceil(28 * cdScale);
-      for (const p of players) {
-        if (p.isBoss || p.health <= 0) continue;
-        const ddx = this.cx() - p.cx();
-        const ddy = (this.y + this.h * 0.5) - (p.y + p.h * 0.5);
-        const dd  = Math.hypot(ddx, ddy) || 1;
-        p.vx = (ddx / dd) * 18;
-        p.vy = (ddy / dd) * 9 - 3;
-      }
+      bossWarnings.push({ type: 'circle', x: this.cx(), y: this.cy(), r: 350,
+        color: '#9900cc', timer: 40, maxTimer: 40, label: 'GRAVITY PULL!' });
+      this._pendingGravPulse = { timer: 40, edge: true };
       spawnParticles(this.cx(), this.cy(), '#9900cc', 20);
       screenShake = Math.max(screenShake, 14);
       showBossDialogue('You cannot hide at the edges.', 180);
@@ -697,6 +718,15 @@ class TrueForm extends Fighter {
     this._runAwayTicks    = 0;
     // Shockwave cooldown
     this._shockwaveCd     = 0;
+    this._teleportComboCd = 0;  // Teleport Combo — 12s
+    this._gravityCrushCd  = 0;  // Gravity Crush  — 15s
+    // Pending (deferred) attacks — telegraph first, then execute
+    this._pendingSlash        = null; // { timer, targetX, targetY, target }
+    this._pendingShockwave    = null; // { timer } — ground variant only
+    this._pendingTeleportCombo = null; // { hits, target }
+    this._pendingGravityCrush = null;  // { timer }
+    this._prevHealth       = 5000; // for stagger accumulation tracking
+    this._cinematicFired   = new Set(); // HP-threshold mid-fight cinematics already triggered
   }
 
   getPhase() {
@@ -726,6 +756,7 @@ class TrueForm extends Fighter {
     if (activeCinematic) return; // freeze during cinematic moments
     if (this.aiReact > 0) { this.aiReact--; return; }
     if (this.ragdollTimer > 0 || this.stunTimer > 0) return;
+    if (bossStaggerTimer > 0) return; // stunned — vulnerability window
     if (this.postSpecialPause > 0) { this.postSpecialPause--; return; }
 
     const phase = this.getPhase();
@@ -734,6 +765,27 @@ class TrueForm extends Fighter {
       if (settings.screenShake) screenShake = Math.max(screenShake, 22);
       this.postSpecialPause = Math.max(this.postSpecialPause, 7); // 7 ticks = 105 frames = 1.75s cinematic pause
       triggerPhaseTransition(this, phase);
+    }
+
+    // ── Mid-fight HP cinematics ───────────────────────────────
+    if (!this._cinematicFired.has('entry')) {
+      this._cinematicFired.add('entry');
+      this.postSpecialPause = Math.max(this.postSpecialPause, 16);
+      startCinematic(_makeTFEntryCinematic(this));
+      return;
+    }
+    const _tfHpPct = this.health / this.maxHealth;
+    if (!this._cinematicFired.has('50') && _tfHpPct <= 0.50) {
+      this._cinematicFired.add('50');
+      this.postSpecialPause = Math.max(this.postSpecialPause, 14);
+      startCinematic(_makeTFReality50Cinematic(this));
+      return;
+    }
+    if (!this._cinematicFired.has('15') && _tfHpPct <= 0.15) {
+      this._cinematicFired.add('15');
+      this.postSpecialPause = Math.max(this.postSpecialPause, 16);
+      startCinematic(_makeTFDesp15Cinematic(this));
+      return;
     }
 
     // Combo reset: if no new attack for 90 frames, reset combo window
@@ -757,7 +809,9 @@ class TrueForm extends Fighter {
     if (this._meteorCd    > 0) this._meteorCd--;
     if (this._cloneCd     > 0) this._cloneCd--;
     if (this._chainCd     > 0) this._chainCd--;
-    if (this._shockwaveCd > 0) this._shockwaveCd--;
+    if (this._shockwaveCd     > 0) this._shockwaveCd--;
+    if (this._teleportComboCd > 0) this._teleportComboCd--;
+    if (this._gravityCrushCd  > 0) this._gravityCrushCd--;
 
     // Floor-removal countdown
     if (tfFloorRemoved) {
@@ -893,9 +947,13 @@ class TrueForm extends Fighter {
 
     // ── Phase 3+ attacks ─────────────────────────────────────
     if (phase >= 3) {
-      if (this._graspCd <= 0) w.grasp = 0.22;
-      if (this._chainCd <= 0) w.chain = 0.18;
+      if (this._graspCd         <= 0) w.grasp         = 0.22;
+      if (this._chainCd         <= 0) w.chain         = 0.18;
+      if (this._teleportComboCd <= 0) w.teleportCombo = 0.20;
+      if (this._gravityCrushCd  <= 0) w.gravityCrush  = 0.16;
     }
+    // Phase 2+ gravity crush (weaker version)
+    if (phase === 2 && this._gravityCrushCd <= 0) w.gravityCrush = 0.08;
 
     // ── Distance zone modifiers ───────────────────────────────
     const closeDist = d < 100;
@@ -930,11 +988,16 @@ class TrueForm extends Fighter {
       if (w.meteor) w.meteor = (w.meteor || 0) * 3.0;
       if (w.slash)  w.slash  = (w.slash  || 0) * 2.5;
     }
-    // Player near arena edge → pull with gravity well
+    // Player near arena edge → pull with gravity well / crush
     if (playerEdge) {
-      if (w.well)     w.well     = (w.well     || 0) * 2.2;
-      if (w.grasp)    w.grasp    = (w.grasp    || 0) * 1.6;
-      if (w.shockwave) w.shockwave = (w.shockwave || 0) * 1.4;
+      if (w.well)          w.well          = (w.well          || 0) * 2.2;
+      if (w.grasp)         w.grasp         = (w.grasp         || 0) * 1.6;
+      if (w.shockwave)     w.shockwave     = (w.shockwave     || 0) * 1.4;
+      if (w.gravityCrush)  w.gravityCrush  = (w.gravityCrush  || 0) * 2.2;
+    }
+    // Player standing still → teleport combo
+    if (this._stillTimer > 6 && w.teleportCombo) {
+      w.teleportCombo = (w.teleportCombo || 0) * 2.8;
     }
     // Player airborne → slam them down
     if (playerAir) {
@@ -994,34 +1057,27 @@ class TrueForm extends Fighter {
             p.vy = (ddy / dd) * pull * 0.5 - 4;
           }
         }
+        // Telegraph: show slam impact zone at boss position for the pull duration
+        bossWarnings.push({ type: 'circle', x: this.cx(), y: this.cy(), r: 120,
+          color: '#ff00ff', timer: 45, maxTimer: 45, label: 'SLAM INCOMING!' });
         // Schedule a slam hit after the pull lands (~45 frames)
         tfGraspSlam = { timer: 45 };
         break;
       }
-      // ── NEW: Reality Slash ──────────────────────────────────
+      // ── NEW: Reality Slash — DEFERRED with telegraph ────────
       case 'slash': {
         this._slashCd = Math.ceil(16 * cdMult);
-        this.postSpecialPause = 3;
-        // Teleport instantly behind target
+        this.postSpecialPause = 5;
+        // Telegraph: show red X + slash cone at the target's current position (30 frames)
         const behindOff = (target.facing || 1) * 55;
-        const tpX = clamp(target.cx() + behindOff - this.w / 2, 20, GAME_W - this.w - 20);
-        this.x = tpX;
-        this.y = clamp(target.y, 20, 440);
-        this.facing = (target.cx() > this.cx() ? 1 : -1);
-        spawnParticles(this.cx(), this.cy(), '#ffffff', 20);
-        spawnParticles(this.cx(), this.cy(), '#000000', 12);
-        screenShake = Math.max(screenShake, 12);
-        // Immediate slash damage
-        dealDamage(this, target, 26, 10);
-        // Shockwave — radial force + chip damage to all nearby players
-        for (const p of players) {
-          if (p.isBoss || p.health <= 0) continue;
-          const sdx = p.cx() - this.cx();
-          if (Math.abs(sdx) < 220) {
-            p.vx += (sdx > 0 ? 1 : -1) * 9;
-            if (p !== target) dealDamage(this, p, 8, 5);
-          }
-        }
+        const warnX = clamp(target.cx() + behindOff, 20, GAME_W - 20);
+        const warnY = clamp(target.y + target.h * 0.5, 20, 450);
+        bossWarnings.push({ type: 'cross',  x: target.cx(), y: target.cy(),
+          r: 30, color: '#ffffff', timer: 30, maxTimer: 30, label: 'TELEPORT!' });
+        bossWarnings.push({ type: 'circle', x: warnX, y: warnY,
+          r: 80, color: '#ff0044', timer: 30, maxTimer: 30, label: 'SLASH ZONE' });
+        // Store pending slash; execute teleport+damage after telegraph
+        this._pendingSlash = { timer: 30, target, behindOff };
         showBossDialogue('Too slow.', 100);
         break;
       }
@@ -1032,6 +1088,9 @@ class TrueForm extends Fighter {
         const wellX = GAME_W / 2 + (Math.random() - 0.5) * 200;
         const wellY = 320 + Math.random() * 60;
         tfGravityWells.push({ x: wellX, y: wellY, r: 200, timer: 270, maxTimer: 270, strength: 16 });
+        // Telegraph: pulsing danger ring at well spawn location
+        bossWarnings.push({ type: 'circle', x: wellX, y: wellY,
+          r: 200, color: '#8800ff', timer: 40, maxTimer: 40, label: 'GRAVITY WELL!' });
         screenShake = Math.max(screenShake, 16);
         spawnParticles(wellX, wellY, '#440044', 28);
         spawnParticles(wellX, wellY, '#8800ff', 14);
@@ -1141,30 +1200,53 @@ class TrueForm extends Fighter {
         tfPortalTeleport(this, target);
         this._portalCd = Math.ceil(24 * cdMult);
         break;
-      // ── NEW: Shockwave Pulse ─────────────────────────────────
+      // ── Teleport Combo — teleport to player 3× in quick succession, attack each time ──
+      case 'teleportCombo': {
+        this._teleportComboCd = Math.ceil(48 * cdMult);
+        this.postSpecialPause = 8;
+        showBossDialogue(randChoice(['Nowhere to run.', 'You cannot track me.', 'EVERYWHERE AT ONCE.']), 200);
+        screenShake = Math.max(screenShake, 18);
+        spawnParticles(this.cx(), this.cy(), '#000000', 18);
+        spawnParticles(this.cx(), this.cy(), '#ffffff', 10);
+        // Schedule 3 rapid teleport-strikes (each 18 frames apart)
+        this._pendingTeleportCombo = {
+          hits:   3,
+          gap:    18,  // frames between each strike
+          timer:  6,   // frames until first strike
+          target,
+        };
+        break;
+      }
+      // ── Gravity Crush — suck all players toward arena center, then explode outward ──
+      case 'gravityCrush': {
+        this._gravityCrushCd = Math.ceil(60 * cdMult);
+        this.postSpecialPause = 10;
+        showBossDialogue(randChoice(['CONVERGE.', 'Nowhere to go.', 'All roads lead to me.']), 220);
+        screenShake = Math.max(screenShake, 22);
+        spawnParticles(GAME_W / 2, GAME_H / 2, '#440044', 30);
+        spawnParticles(GAME_W / 2, GAME_H / 2, '#ffffff', 15);
+        // Telegraph warning circle at arena center
+        bossWarnings.push({ type: 'circle', x: GAME_W / 2, y: GAME_H / 2,
+          r: 200, color: '#8800ff', timer: 60, maxTimer: 60, label: 'CRUSH!' });
+        // Schedule the detonation after 60 frames of pull
+        this._pendingGravityCrush = { timer: 60, boss: this };
+        break;
+      }
+      // ── NEW: Shockwave Pulse — ground variant deferred with telegraph ────────
       case 'shockwave': {
         this._shockwaveCd = Math.ceil(20 * cdMult);
-        this.postSpecialPause = 3;
+        this.postSpecialPause = 5;
         if (this.onGround) {
-          screenShake = Math.max(screenShake, 22);
-          spawnParticles(this.cx(), this.y + this.h, '#ffffff', 30);
-          spawnParticles(this.cx(), this.y + this.h, '#440044', 22);
-          spawnParticles(this.cx(), this.y + this.h, '#8800ff', 14);
-          const bossRef = this;
-          for (let ri = 0; ri < 3; ri++) {
-            tfShockwaves.push({
-              x: bossRef.cx(), y: bossRef.y + bossRef.h,
-              r: 12 + ri * 6, maxR: 260 + ri * 70,
-              timer: 38 + ri * 9, maxTimer: 38 + ri * 9,
-              boss: bossRef, hit: new Set(),
-            });
-          }
+          // Telegraph: expanding warning ring on ground (20 frames ≈ 0.33s)
+          bossWarnings.push({ type: 'circle', x: this.cx(), y: this.y + this.h,
+            r: 340, color: '#aa00ff', timer: 20, maxTimer: 20, label: 'SHOCKWAVE!' });
+          this._pendingShockwave = { timer: 20, boss: this };
         } else {
-          // Air slam: crash down fast, wave spawns when landing is detected by updateTFShockwaves
+          // Air slam: crash down fast, wave spawns when landing
           this.vy = Math.max(this.vy, 24);
           tfShockwaves.push({
             x: this.cx(), y: this.y + this.h,
-            r: 0, maxR: 0,    // zero-size sentinel — spawns real waves on contact
+            r: 0, maxR: 0,
             timer: 1, maxTimer: 1,
             boss: this, hit: new Set(), pendingLanding: true,
           });
@@ -1809,6 +1891,391 @@ function _makeYetiPhase2Cinematic(yetiEnt) {
 }
 
 // ============================================================
+// MID-FIGHT CINEMATICS — see js/smc-cinematics.js for all 6 factory fns
+// ============================================================
+// _makeBossWarning75Cinematic, _makeBossRage40Cinematic, _makeBossDesp10Cinematic,
+// _makeTFEntryCinematic, _makeTFReality50Cinematic, _makeTFDesp15Cinematic
+// are all defined in smc-cinematics.js using the cinScript() API.
+/* DELETED OLD IMPLEMENTATIONS BELOW — kept as dead code marker only */
+function _DELETED_makeBossWarning75Cinematic(boss) {
+  return {
+    durationFrames: 180, // 3 s
+    _warnFired: false, _line1Fired: false, _line2Fired: false,
+    _phaseLabel: { text: '— MY WORLD —', color: '#cc00ee' },
+    update(t) {
+      if (t < 0.3)      slowMotion = Math.max(0.18, 1 - t * 2.7);
+      else if (t > 2.2) slowMotion = Math.min(1.0, (t - 2.2) / 0.8);
+      else              slowMotion = 0.18;
+
+      cinematicCamOverride = t < 2.6;
+      if (cinematicCamOverride && boss) {
+        cinematicZoomTarget = Math.min(1.4, 1 + t * 0.28);
+        cinematicFocusX = boss.cx();
+        cinematicFocusY = boss.cy() - 30 * Math.min(1, t * 1.2); // camera drifts upward
+      }
+
+      // 0.5 s: boss floats upward + rings + hazard warning begins
+      if (t >= 0.5 && !this._warnFired) {
+        this._warnFired = true;
+        if (boss) {
+          boss.vy = Math.min(boss.vy, -14); // float upward
+          for (let i = 0; i < 4; i++) {
+            phaseTransitionRings.push({ cx: boss.cx(), cy: boss.cy(),
+              r: 8 + i * 18, maxR: 200 + i * 40, timer: 60 + i * 12, maxTimer: 60 + i * 12,
+              color: i % 2 === 0 ? '#aa00cc' : '#ff88ff', lineWidth: 3.5 - i * 0.5 });
+          }
+          spawnParticles(boss.cx(), boss.cy(), '#cc00ee', 30);
+          spawnParticles(boss.cx(), boss.cy(), '#ffffff', 18);
+          screenShake = Math.max(screenShake, 22);
+          // Trigger arena hazard warning early
+          if (typeof bossFloorState !== 'undefined' && bossFloorState === 'normal') {
+            bossFloorState = 'warning';
+            bossFloorTimer = 300;
+            bossFloorType  = Math.random() < 0.5 ? 'lava' : 'void';
+          }
+        }
+      }
+      if (t >= 0.9 && !this._line1Fired) {
+        this._line1Fired = true;
+        showBossDialogue('You fight... in a world I created.', 200);
+      }
+      if (t >= 1.8 && !this._line2Fired) {
+        this._line2Fired = true;
+        showBossDialogue('And I can break it.', 200);
+      }
+    },
+    onEnd() { slowMotion = 1.0; cinematicCamOverride = false; }
+  };
+}
+
+function _DELETED_makeBossRage40Cinematic(boss) {
+  return {
+    durationFrames: 240, // 4 s
+    _grabFired: false, _slamFired: false, _line1Fired: false, _line2Fired: false,
+    _throwTarget: null,
+    _phaseLabel: { text: '— ENOUGH. —', color: '#ff0044' },
+    update(t) {
+      // Phase 1 (0–0.4s): freeze into the moment
+      // Phase 2 (0.4–1.1s): speed up so the throw VISUALLY travels across the screen
+      // Phase 3 (1.1–1.6s): freeze for impact / slam
+      // Phase 4 (1.6–3.5s): slow crawl for dialogue, then ramp back
+      if      (t < 0.4)  slowMotion = Math.max(0.05, 1 - t * 2.4);   // ramp down to near-freeze
+      else if (t < 1.1)  slowMotion = Math.min(0.55, (t - 0.4) * 0.8); // ramp UP — throw is visible
+      else if (t < 1.6)  slowMotion = Math.max(0.05, 0.55 - (t - 1.1) * 1.1); // freeze for slam impact
+      else if (t > 3.7)  slowMotion = Math.min(1.0, (t - 3.7) / 0.3);
+      else               slowMotion = 0.06;                              // crawl for dialogue
+
+      cinematicCamOverride = t < 3.9;
+      if (cinematicCamOverride && boss) {
+        const trackTarget = this._throwTarget || players.find(p => !p.isBoss && p.health > 0);
+        // During throw (0.4–1.1s) follow the flying player; otherwise focus between boss & player
+        const focusX = (t >= 0.4 && t < 1.2 && trackTarget)
+          ? trackTarget.cx()
+          : trackTarget ? (boss.cx() + trackTarget.cx()) * 0.5 : boss.cx();
+        cinematicZoomTarget = t < 0.4 ? Math.min(1.8, 1 + t * 2.0)  // zoom in fast
+                            : t < 1.1 ? Math.max(0.9, 1.8 - (t - 0.4) * 1.3) // zoom out to follow throw
+                            : Math.min(1.5, 0.9 + (t - 1.1) * 0.8);
+        cinematicFocusX = focusX;
+        cinematicFocusY = trackTarget ? trackTarget.cy() : boss.cy();
+      }
+
+      // 0.4 s: boss teleports directly behind player and hurls them
+      if (t >= 0.4 && !this._grabFired) {
+        this._grabFired = true;
+        const target = players.find(p => !p.isBoss && p.health > 0);
+        if (boss && target) {
+          this._throwTarget = target;
+          // Teleport boss right behind the player (same side as their back)
+          const facingRight = target.vx >= 0;
+          const behindX = facingRight ? target.cx() - 55 : target.cx() + 55;
+          boss.x = behindX - boss.w / 2;
+          boss.y = target.y;
+          boss.vy = 0;
+          spawnParticles(boss.cx(), boss.cy(), '#cc00ee', 35);
+          spawnParticles(boss.cx(), boss.cy(), '#ff44ff', 20);
+          spawnParticles(target.cx(), target.cy(), '#ff0044', 20);
+          screenShake = Math.max(screenShake, 22);
+          // Throw: opposite direction to behind offset, arc upward
+          const throwDir = facingRight ? 1 : -1;
+          target.vx = throwDir * 22;
+          target.vy = -14;
+          target.hurtTimer = Math.max(target.hurtTimer, 35);
+          target.stunTimer  = Math.max(target.stunTimer || 0, 30); // brief stun so player can't air-dodge
+        }
+      }
+
+      // 1.1 s: boss slam hits the ground as player lands — shockwave
+      if (t >= 1.1 && !this._slamFired) {
+        this._slamFired = true;
+        if (boss) {
+          boss.vy = 28;
+          const slamX = this._throwTarget ? (boss.cx() + this._throwTarget.cx()) * 0.5 : boss.cx();
+          for (let i = 0; i < 6; i++) {
+            phaseTransitionRings.push({ cx: slamX, cy: GAME_H - 60,
+              r: 5 + i * 18, maxR: 320 + i * 40, timer: 70 + i * 12, maxTimer: 70 + i * 12,
+              color: i % 2 === 0 ? '#ff0044' : '#ff8800', lineWidth: 4.5 - i * 0.5 });
+          }
+          spawnParticles(slamX, GAME_H - 60, '#ff0044', 55);
+          spawnParticles(slamX, GAME_H - 60, '#ffffff', 30);
+          screenShake = Math.max(screenShake, 52);
+          for (const p of players) {
+            if (p.isBoss || p.health <= 0) continue;
+            const dir = p.cx() >= slamX ? 1 : -1;
+            p.vx += dir * 14; p.vy = Math.min(p.vy, -10);
+            p.hurtTimer = Math.max(p.hurtTimer, 18);
+          }
+        }
+      }
+
+      if (t >= 1.5 && !this._line1Fired) {
+        this._line1Fired = true;
+        showBossDialogue('Enough.', 140);
+      }
+      if (t >= 2.2 && !this._line2Fired) {
+        this._line2Fired = true;
+        showBossDialogue('I will ERASE you.', 220);
+      }
+    },
+    onEnd() { slowMotion = 1.0; cinematicCamOverride = false; }
+  };
+}
+
+function _DELETED_makeBossDesp10Cinematic(boss) {
+  return {
+    durationFrames: 180, // 3 s
+    _staggerFired: false, _despFired: false, _line1Fired: false, _line2Fired: false,
+    _phaseLabel: { text: '— IMPOSSIBLE —', color: '#ffffff' },
+    update(t) {
+      if (t < 0.2)      slowMotion = Math.max(0.04, 1 - t * 4.8);
+      else if (t > 2.2) slowMotion = Math.min(1.0, (t - 2.2) / 0.8);
+      else              slowMotion = 0.04;
+
+      cinematicCamOverride = t < 2.6;
+      if (cinematicCamOverride && boss) {
+        cinematicZoomTarget = Math.min(1.85, 1 + t * 0.55);
+        cinematicFocusX = boss.cx();
+        cinematicFocusY = boss.cy();
+      }
+
+      // 0.35 s: boss staggers visually — shake + rings
+      if (t >= 0.35 && !this._staggerFired) {
+        this._staggerFired = true;
+        if (boss) {
+          boss.hurtTimer = 30;
+          boss.stunTimer = 18;
+          boss.vx *= 0.1;
+          for (let i = 0; i < 6; i++) {
+            phaseTransitionRings.push({ cx: boss.cx(), cy: boss.cy(),
+              r: 8 + i * 12, maxR: 180 + i * 25, timer: 55 + i * 10, maxTimer: 55 + i * 10,
+              color: i % 2 === 0 ? '#ffffff' : '#ff4444', lineWidth: 3 - i * 0.35 });
+          }
+          spawnParticles(boss.cx(), boss.cy(), '#ffffff', 50);
+          spawnParticles(boss.cx(), boss.cy(), '#ff0000', 32);
+          spawnParticles(boss.cx(), boss.cy(), '#cc00ee', 20);
+          screenShake = Math.max(screenShake, 40);
+          if (settings.phaseFlash) bossPhaseFlash = 60;
+        }
+      }
+
+      // 1.0 s: activate desperation mode
+      if (t >= 1.0 && !this._despFired) {
+        this._despFired = true;
+        bossDesperationMode  = true;
+        bossDesperationFlash = 90;
+        if (boss) {
+          bossStaggerTimer = 0; // end stagger so it can fight
+        }
+      }
+
+      if (t >= 0.8 && !this._line1Fired) {
+        this._line1Fired = true;
+        showBossDialogue('Impossible...', 200);
+      }
+      if (t >= 1.5 && !this._line2Fired) {
+        this._line2Fired = true;
+        showBossDialogue('You refuse to break!', 220);
+      }
+    },
+    onEnd() { slowMotion = 1.0; cinematicCamOverride = false; }
+  };
+}
+
+// ============================================================
+// MID-FIGHT CINEMATICS — True Form (entry, 50%, 15%)
+// ============================================================
+function _DELETED_makeTFEntryCinematic(tf) {
+  return {
+    durationFrames: 240, // 4 s
+    _burstFired: false, _line1Fired: false, _line2Fired: false,
+    _phaseLabel: { text: '— TRUE FORM —', color: '#ffffff' },
+    update(t) {
+      if (t < 0.3)      slowMotion = Math.max(0.08, 1 - t * 3.1);
+      else if (t > 3.1) slowMotion = Math.min(1.0, (t - 3.1) / 0.9);
+      else              slowMotion = 0.08;
+
+      cinematicCamOverride = t < 3.6;
+      if (cinematicCamOverride && tf) {
+        cinematicZoomTarget = Math.min(1.65, 1 + t * 0.38);
+        cinematicFocusX = tf.cx();
+        cinematicFocusY = tf.cy();
+      }
+
+      // 0.6 s: energy burst pushes players, rings expand
+      if (t >= 0.6 && !this._burstFired) {
+        this._burstFired = true;
+        if (tf) {
+          for (let i = 0; i < 6; i++) {
+            phaseTransitionRings.push({ cx: tf.cx(), cy: tf.cy(),
+              r: 5 + i * 14, maxR: 320 + i * 30, timer: 68 + i * 12, maxTimer: 68 + i * 12,
+              color: i % 2 === 0 ? '#ffffff' : '#333333', lineWidth: 4 - i * 0.5 });
+          }
+          spawnParticles(tf.cx(), tf.cy(), '#ffffff', 55);
+          spawnParticles(tf.cx(), tf.cy(), '#000000', 40);
+          spawnParticles(tf.cx(), tf.cy(), '#888888', 25);
+          screenShake = Math.max(screenShake, 38);
+          if (settings.phaseFlash) bossPhaseFlash = 55;
+          for (const p of players) {
+            if (p.isBoss || p.health <= 0) continue;
+            const dir = p.cx() >= tf.cx() ? 1 : -1;
+            p.vx += dir * 18; p.vy = Math.min(p.vy, -11);
+            p.hurtTimer = Math.max(p.hurtTimer, 20);
+          }
+        }
+      }
+      if (t >= 1.2 && !this._line1Fired) {
+        this._line1Fired = true;
+        showBossDialogue('You forced my hand.', 220);
+      }
+      if (t >= 2.1 && !this._line2Fired) {
+        this._line2Fired = true;
+        showBossDialogue('Witness my TRUE POWER.', 240);
+      }
+    },
+    onEnd() { slowMotion = 1.0; cinematicCamOverride = false; }
+  };
+}
+
+function _DELETED_makeTFReality50Cinematic(tf) {
+  return {
+    durationFrames: 210, // 3.5 s
+    _gravFired: false, _stormFired: false, _lineFired: false,
+    _phaseLabel: { text: '— REALITY BENDS —', color: '#cccccc' },
+    update(t) {
+      if (t < 0.3)      slowMotion = Math.max(0.12, 1 - t * 2.9);
+      else if (t > 2.4) slowMotion = Math.min(1.0, (t - 2.4) / 1.1);
+      else              slowMotion = 0.12;
+
+      cinematicCamOverride = t < 3.2;
+      if (cinematicCamOverride && tf) {
+        // Slowly zoom out to show whole arena
+        cinematicZoomTarget = Math.max(0.7, 1.4 - t * 0.22);
+        cinematicFocusX = GAME_W / 2;
+        cinematicFocusY = GAME_H / 2;
+      }
+
+      // 0.5 s: gravity reverses briefly — players float
+      if (t >= 0.5 && !this._gravFired) {
+        this._gravFired = true;
+        tfGravityInverted = true;
+        tfGravityTimer    = 180; // 3 s of inverted gravity
+        if (tf) {
+          for (let i = 0; i < 5; i++) {
+            phaseTransitionRings.push({ cx: tf.cx(), cy: tf.cy(),
+              r: 6 + i * 15, maxR: 280 + i * 32, timer: 64 + i * 11, maxTimer: 64 + i * 11,
+              color: i % 2 === 0 ? '#ffffff' : '#666666', lineWidth: 3.5 - i * 0.5 });
+          }
+          spawnParticles(tf.cx(), tf.cy(), '#ffffff', 40);
+          spawnParticles(tf.cx(), tf.cy(), '#888888', 28);
+          screenShake = Math.max(screenShake, 34);
+        }
+      }
+
+      if (t >= 0.9 && !this._lineFired) {
+        this._lineFired = true;
+        showBossDialogue('Reality... bends to me.', 230);
+      }
+
+      // 2.0 s: trigger meteor storm special for TrueForm
+      if (t >= 2.0 && !this._stormFired) {
+        this._stormFired = true;
+        if (tf && typeof tf._doSpecial === 'function') {
+          const target = players.find(p => !p.isBoss && p.health > 0);
+          if (target) tf._doSpecial('meteorCrash', target);
+        }
+      }
+    },
+    onEnd() { slowMotion = 1.0; cinematicCamOverride = false; }
+  };
+}
+
+function _DELETED_makeTFDesp15Cinematic(tf) {
+  return {
+    durationFrames: 180, // 3 s
+    _crackFired: false, _despFired: false, _lineFired: false,
+    _phaseLabel: { text: '— WE FALL TOGETHER —', color: '#ffffff' },
+    update(t) {
+      if (t < 0.2)      slowMotion = Math.max(0.03, 1 - t * 4.9);
+      else if (t > 2.1) slowMotion = Math.min(1.0, (t - 2.1) / 0.9);
+      else              slowMotion = 0.03;
+
+      cinematicCamOverride = t < 2.7;
+      if (cinematicCamOverride && tf) {
+        cinematicZoomTarget = Math.min(2.0, 1 + t * 0.65);
+        cinematicFocusX = tf.cx();
+        cinematicFocusY = tf.cy();
+      }
+
+      // 0.3 s: massive rings, flash, arena destabilises
+      if (t >= 0.3 && !this._crackFired) {
+        this._crackFired = true;
+        if (tf) {
+          for (let i = 0; i < 7; i++) {
+            phaseTransitionRings.push({ cx: tf.cx(), cy: tf.cy(),
+              r: 5 + i * 11, maxR: 380 + i * 24, timer: 70 + i * 14, maxTimer: 70 + i * 14,
+              color: i % 2 === 0 ? '#ffffff' : '#000000', lineWidth: 5 - i * 0.6 });
+          }
+          spawnParticles(tf.cx(), tf.cy(), '#ffffff', 70);
+          spawnParticles(tf.cx(), tf.cy(), '#000000', 55);
+          spawnParticles(tf.cx(), tf.cy(), '#555555', 30);
+          screenShake = Math.max(screenShake, 55);
+          if (settings.phaseFlash) bossPhaseFlash = 85;
+          for (const p of players) {
+            if (p.isBoss || p.health <= 0) continue;
+            const dir = p.cx() >= tf.cx() ? 1 : -1;
+            p.vx += dir * 22; p.vy = Math.min(p.vy, -16);
+            p.hurtTimer = Math.max(p.hurtTimer, 24);
+          }
+        }
+      }
+
+      // 1.2 s: activate desperation + remove floor + trigger hazards
+      if (t >= 1.2 && !this._despFired) {
+        this._despFired = true;
+        bossDesperationMode  = true;
+        bossDesperationFlash = 90;
+        // Remove floor for dramatic effect
+        if (!tfFloorRemoved) {
+          tfFloorRemoved = true;
+          tfFloorTimer   = 600; // 10 s
+          const floorPl  = currentArena && currentArena.platforms.find(p => p.isFloor);
+          if (floorPl) floorPl.isFloorDisabled = true;
+          showBossDialogue('The ground is GONE!', 160);
+        }
+        // Spawn black holes at both sides
+        tfBlackHoles.push({ x: 120, y: 260, r: 110, timer: 480, maxTimer: 480, strength: 5 });
+        tfBlackHoles.push({ x: 780, y: 260, r: 110, timer: 480, maxTimer: 480, strength: 5 });
+      }
+
+      if (t >= 0.7 && !this._lineFired) {
+        this._lineFired = true;
+        showBossDialogue('Then we fall TOGETHER!', 250);
+      }
+    },
+    onEnd() { slowMotion = 1.0; cinematicCamOverride = false; }
+  };
+}
+
+// ============================================================
 // PHASE TRANSITION — triggers appropriate cinematic sequence
 // ============================================================
 function triggerPhaseTransition(entity, phase) {
@@ -2182,6 +2649,420 @@ function drawTFShockwaves() {
   }
 }
 
+// ============================================================
+// BOSS TELEGRAPH — update pending attacks, stagger, desperation
+// ============================================================
+function updateBossPendingAttacks() {
+  if (!gameRunning) return;
+  const boss = players.find(p => p.isBoss && !p.isTrueForm);
+
+  // ── Tick bossWarnings (visual only) ───────────────────────
+  for (let i = bossWarnings.length - 1; i >= 0; i--) {
+    bossWarnings[i].timer--;
+    if (bossWarnings[i].timer <= 0) bossWarnings.splice(i, 1);
+  }
+  // ── Tick safe zones ────────────────────────────────────────
+  for (let i = bossMetSafeZones.length - 1; i >= 0; i--) {
+    bossMetSafeZones[i].timer--;
+    if (bossMetSafeZones[i].timer <= 0) bossMetSafeZones.splice(i, 1);
+  }
+  // ── Desperation flash decay ────────────────────────────────
+  if (bossDesperationFlash > 0) bossDesperationFlash--;
+
+  if (!boss || boss.health <= 0) return;
+
+  // ── Stagger: accumulate damage taken, trigger stun ────────
+  const dmgThisFrame = (boss._prevHealth || boss.health) - boss.health;
+  if (dmgThisFrame > 0) {
+    bossStaggerDmg   += dmgThisFrame;
+    bossStaggerDecay  = 180; // 3s window
+  }
+  boss._prevHealth = boss.health;
+  if (bossStaggerDecay > 0) {
+    bossStaggerDecay--;
+    if (bossStaggerDecay <= 0) bossStaggerDmg = 0;
+  }
+  if (bossStaggerDmg >= 120 && bossStaggerTimer <= 0) {
+    bossStaggerTimer = 150; // 2.5s stagger
+    bossStaggerDmg   = 0;
+    bossStaggerDecay = 0;
+    screenShake = Math.max(screenShake, 25);
+    showBossDialogue(randChoice(['...impossible...', '*staggers*', 'You... hit hard.', 'Ngh!']), 120);
+    spawnParticles(boss.cx(), boss.cy(), '#ffffff', 22);
+    if (typeof directorAddIntensity === 'function') directorAddIntensity(0.4);
+  }
+  if (bossStaggerTimer > 0) {
+    bossStaggerTimer--;
+    boss.vx *= 0.85; // slow boss during stagger
+    if (bossStaggerTimer === 0) {
+      showBossDialogue(randChoice(['...that was nothing.', 'My turn.', 'Enough playing.']), 120);
+    }
+  }
+
+  // ── Desperation mode: health < 25% ───────────────────────
+  if (!bossDesperationMode && boss.health / boss.maxHealth < 0.25) {
+    bossDesperationMode  = true;
+    bossDesperationFlash = 90;
+    screenShake = Math.max(screenShake, 30);
+    showBossDialogue('YOU...WILL...DIE.', 300);
+    spawnParticles(boss.cx(), boss.cy(), '#ff0000', 40);
+    spawnParticles(boss.cx(), boss.cy(), '#cc00ee', 30);
+    if (typeof directorAddIntensity === 'function') directorAddIntensity(0.8);
+  }
+
+  // ── Pending Ground Slam ───────────────────────────────────
+  if (boss._pendingGroundSlam) {
+    boss._pendingGroundSlam.timer--;
+    if (boss._pendingGroundSlam.timer <= 0) {
+      screenShake = Math.max(screenShake, 20);
+      spawnParticles(boss.cx(), boss.y + boss.h, '#cc00ee', 30);
+      spawnParticles(boss.cx(), boss.y + boss.h, '#ffffff', 14);
+      for (const p of players) {
+        if (p.isBoss || p.health <= 0) continue;
+        if (dist(boss, p) < 160) {
+          dealDamage(boss, p, 20, 14);
+          const rDir = p.cx() > boss.cx() ? 1 : -1;
+          p.vx += rDir * 16;
+          p.vy  = Math.min(p.vy, -10);
+        }
+      }
+      for (let i = 0; i < 6; i++) {
+        const sx = clamp(boss.cx() + (i - 2.5) * 55, 20, 880);
+        bossSpikes.push({ x: sx, maxH: 70 + Math.random() * 40, h: 0,
+          phase: 'rising', stayTimer: 0, done: false });
+      }
+      if (typeof directorAddIntensity === 'function') directorAddIntensity(0.15);
+      boss._pendingGroundSlam = null;
+    }
+  }
+
+  // ── Pending Gravity Pulse ─────────────────────────────────
+  if (boss._pendingGravPulse) {
+    boss._pendingGravPulse.timer--;
+    if (boss._pendingGravPulse.timer <= 0) {
+      screenShake = Math.max(screenShake, 18);
+      spawnParticles(boss.cx(), boss.cy(), '#9900cc', 28);
+      spawnParticles(boss.cx(), boss.cy(), '#cc66ff', 14);
+      for (const p of players) {
+        if (p.isBoss || p.health <= 0) continue;
+        const ddx = boss.cx() - p.cx();
+        const ddy = (boss.y + boss.h * 0.5) - (p.y + p.h * 0.5);
+        const dd  = Math.hypot(ddx, ddy);
+        const isEdge = boss._pendingGravPulse.edge;
+        const range  = isEdge ? 500 : 350;
+        const force  = isEdge ? 18  : 22;
+        if (dd < range && dd > 1) {
+          const pull = force * (1 - dd / range);
+          p.vx = (ddx / dd) * pull;
+          p.vy = (ddy / dd) * pull * 0.5 - 5;
+        }
+      }
+      if (typeof directorAddIntensity === 'function') directorAddIntensity(0.14);
+      boss._pendingGravPulse = null;
+    }
+  }
+}
+
+// ── TrueForm pending attacks + stagger ───────────────────────────────────────
+function updateTFPendingAttacks() {
+  if (!gameRunning) return;
+  const tf = players.find(p => p.isTrueForm);
+
+  if (!tf || tf.health <= 0) return;
+
+  // ── Stagger ────────────────────────────────────────────────
+  const dmgThisFrame = (tf._prevHealth || tf.health) - tf.health;
+  if (dmgThisFrame > 0) {
+    bossStaggerDmg   += dmgThisFrame;
+    bossStaggerDecay  = 180;
+  }
+  tf._prevHealth = tf.health;
+  if (bossStaggerDecay > 0) {
+    bossStaggerDecay--;
+    if (bossStaggerDecay <= 0) bossStaggerDmg = 0;
+  }
+  if (bossStaggerDmg >= 150 && bossStaggerTimer <= 0) {
+    bossStaggerTimer = 150;
+    bossStaggerDmg   = 0;
+    bossStaggerDecay = 0;
+    screenShake = Math.max(screenShake, 25);
+    showBossDialogue(randChoice(['...you dare?', '*staggers*', 'Impressive... for a mortal.']), 120);
+    spawnParticles(tf.cx(), tf.cy(), '#ffffff', 22);
+    if (typeof directorAddIntensity === 'function') directorAddIntensity(0.4);
+  }
+  if (bossStaggerTimer > 0) {
+    bossStaggerTimer--;
+    tf.vx *= 0.85;
+    if (bossStaggerTimer === 0) {
+      showBossDialogue(randChoice(['Playtime is over.', 'I will not fall.', 'Your doom approaches.']), 120);
+    }
+  }
+
+  // ── Desperation mode ──────────────────────────────────────
+  if (!bossDesperationMode && tf.health / tf.maxHealth < 0.25) {
+    bossDesperationMode  = true;
+    bossDesperationFlash = 90;
+    screenShake = Math.max(screenShake, 30);
+    showBossDialogue('I AM BEYOND YOUR COMPREHENSION.', 300);
+    spawnParticles(tf.cx(), tf.cy(), '#ffffff', 50);
+    spawnParticles(tf.cx(), tf.cy(), '#000000', 30);
+    if (typeof directorAddIntensity === 'function') directorAddIntensity(0.8);
+  }
+
+  // ── Pending Reality Slash ─────────────────────────────────
+  if (tf._pendingSlash) {
+    tf._pendingSlash.timer--;
+    if (tf._pendingSlash.timer <= 0) {
+      const tgt = tf._pendingSlash.target;
+      const behindOff = tf._pendingSlash.behindOff;
+      const tpX = clamp(tgt.cx() + behindOff - tf.w / 2, 20, GAME_W - tf.w - 20);
+      tf.x = tpX;
+      tf.y = clamp(tgt.y, 20, 440);
+      tf.facing = (tgt.cx() > tf.cx() ? 1 : -1);
+      spawnParticles(tf.cx(), tf.cy(), '#ffffff', 20);
+      spawnParticles(tf.cx(), tf.cy(), '#000000', 12);
+      screenShake = Math.max(screenShake, 12);
+      dealDamage(tf, tgt, 18, 10);
+      for (const p of players) {
+        if (p.isBoss || p.health <= 0) continue;
+        const sdx = p.cx() - tf.cx();
+        if (Math.abs(sdx) < 220) {
+          p.vx += (sdx > 0 ? 1 : -1) * 9;
+          if (p !== tgt) dealDamage(tf, p, 6, 5);
+        }
+      }
+      tf._pendingSlash = null;
+    }
+  }
+
+  // ── Pending Teleport Combo ─────────────────────────────────
+  if (tf._pendingTeleportCombo) {
+    const tc = tf._pendingTeleportCombo;
+    tc.timer--;
+    if (tc.timer <= 0 && tc.hits > 0) {
+      const tgt = tc.target;
+      if (tgt && tgt.health > 0) {
+        // Teleport to alternating sides of the player
+        const side   = tc.hits % 2 === 0 ? 1 : -1;
+        const offset = side * (45 + Math.random() * 25);
+        const tpX    = clamp(tgt.cx() + offset - tf.w / 2, 18, GAME_W - tf.w - 18);
+        tf.x = tpX;
+        tf.y = clamp(tgt.y, 10, 440);
+        tf.facing = tgt.cx() > tf.cx() ? 1 : -1;
+        // Portal burst at new position
+        spawnParticles(tf.cx(), tf.cy(), '#000000', 18);
+        spawnParticles(tf.cx(), tf.cy(), '#ffffff', 10);
+        screenShake = Math.max(screenShake, 14);
+        // Deal damage
+        dealDamage(tf, tgt, 14, 8);
+        // Brief invincibility so we don't get counter-hit during combo
+        tf.invincible = Math.max(tf.invincible, 12);
+      }
+      tc.hits--;
+      if (tc.hits > 0) {
+        tc.timer = tc.gap;
+      } else {
+        tf._pendingTeleportCombo = null;
+        // Final shockwave at landing position
+        if (typeof tfShockwaves !== 'undefined') {
+          tfShockwaves.push({
+            x: tf.cx(), y: tf.y + tf.h,
+            r: 8, maxR: 200,
+            timer: 30, maxTimer: 30,
+            boss: tf, hit: new Set(),
+          });
+        }
+        screenShake = Math.max(screenShake, 22);
+      }
+    }
+  }
+
+  // ── Pending Gravity Crush ──────────────────────────────────
+  if (tf._pendingGravityCrush) {
+    const gc = tf._pendingGravityCrush;
+    gc.timer--;
+    // During pull phase, drag all players toward arena center each frame
+    const pullStrength = 0.55 * (1 - gc.timer / 60); // increases as timer counts down
+    for (const p of players) {
+      if (p.isBoss || p.health <= 0) continue;
+      const pdx = GAME_W / 2 - p.cx();
+      const pdy = GAME_H / 2 - p.cy();
+      p.vx += Math.sign(pdx) * pullStrength * Math.min(1, Math.abs(pdx) / 200);
+      p.vy += Math.sign(pdy) * pullStrength * 0.5;
+    }
+    if (gc.timer <= 0) {
+      // DETONATE — massive outward blast
+      spawnParticles(GAME_W / 2, GAME_H / 2, '#8800ff', 55);
+      spawnParticles(GAME_W / 2, GAME_H / 2, '#ffffff', 35);
+      spawnParticles(GAME_W / 2, GAME_H / 2, '#ff00aa', 20);
+      screenShake = Math.max(screenShake, 40);
+      if (typeof cinScreenFlash !== 'undefined') {
+        cinScreenFlash = { color: '#8800ff', alpha: 0.45, timer: 12, maxTimer: 12 };
+      }
+      // Blast rings
+      if (typeof phaseTransitionRings !== 'undefined') {
+        for (let ri = 0; ri < 5; ri++) {
+          phaseTransitionRings.push({
+            cx: GAME_W / 2, cy: GAME_H / 2,
+            r: 10 + ri * 18, maxR: 380 + ri * 55,
+            timer: 50 + ri * 10, maxTimer: 50 + ri * 10,
+            color: ri % 2 === 0 ? '#8800ff' : '#ffffff',
+            lineWidth: Math.max(0.8, 4 - ri * 0.5),
+          });
+        }
+      }
+      // Knockback and damage all nearby players
+      for (const p of players) {
+        if (p.isBoss || p.health <= 0) continue;
+        const pdx2 = p.cx() - GAME_W / 2;
+        const pdy2 = p.cy() - GAME_H / 2;
+        const dist2 = Math.hypot(pdx2, pdy2) || 1;
+        p.vx += (pdx2 / dist2) * 28;
+        p.vy += (pdy2 / dist2) * 18 - 8;
+        dealDamage(tf, p, 22, 16);
+      }
+      tf._pendingGravityCrush = null;
+    }
+  }
+
+  // ── Pending Shockwave (ground) ─────────────────────────────
+  if (tf._pendingShockwave) {
+    tf._pendingShockwave.timer--;
+    if (tf._pendingShockwave.timer <= 0) {
+      const bossRef = tf._pendingShockwave.boss || tf;
+      screenShake = Math.max(screenShake, 22);
+      spawnParticles(bossRef.cx(), bossRef.y + bossRef.h, '#ffffff', 30);
+      spawnParticles(bossRef.cx(), bossRef.y + bossRef.h, '#440044', 22);
+      spawnParticles(bossRef.cx(), bossRef.y + bossRef.h, '#8800ff', 14);
+      for (let ri = 0; ri < 3; ri++) {
+        tfShockwaves.push({
+          x: bossRef.cx(), y: bossRef.y + bossRef.h,
+          r: 12 + ri * 6, maxR: 260 + ri * 70,
+          timer: 38 + ri * 9, maxTimer: 38 + ri * 9,
+          boss: bossRef, hit: new Set(),
+        });
+      }
+      tf._pendingShockwave = null;
+    }
+  }
+}
+
+// ============================================================
+// DRAW: Boss warnings (telegraph zones) + safe zones + desperation
+// ============================================================
+function drawBossWarnings() {
+  if (!bossWarnings.length && !bossMetSafeZones.length && !bossDesperationFlash) return;
+  ctx.save();
+
+  // ── Desperation screen pulse ───────────────────────────────
+  if (bossDesperationFlash > 0) {
+    const alpha = (bossDesperationFlash / 90) * 0.35;
+    ctx.fillStyle = `rgba(255,0,0,${alpha})`;
+    ctx.fillRect(0, 0, GAME_W, GAME_H);
+  }
+  // Subtle desperation aura — red border pulse when active
+  if (bossDesperationMode) {
+    const pulse = 0.12 + Math.abs(Math.sin(frameCount * 0.07)) * 0.10;
+    ctx.strokeStyle = `rgba(255,30,0,${pulse})`;
+    ctx.lineWidth   = 8;
+    ctx.strokeRect(4, 4, GAME_W - 8, GAME_H - 8);
+  }
+
+  // ── Safe zones ─────────────────────────────────────────────
+  for (const sz of bossMetSafeZones) {
+    const prog  = sz.timer / sz.maxTimer;
+    const alpha = 0.18 + Math.sin(frameCount * 0.12) * 0.07;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle   = '#00ff88';
+    ctx.beginPath(); ctx.arc(sz.x, sz.y, sz.r, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 0.7;
+    ctx.strokeStyle = '#00ffcc';
+    ctx.lineWidth   = 2.5;
+    ctx.shadowColor = '#00ff88';
+    ctx.shadowBlur  = 10;
+    ctx.beginPath(); ctx.arc(sz.x, sz.y, sz.r, 0, Math.PI * 2); ctx.stroke();
+    // Label
+    ctx.globalAlpha = 0.85;
+    ctx.fillStyle   = '#00ffcc';
+    ctx.font        = 'bold 11px monospace';
+    ctx.textAlign   = 'center';
+    ctx.fillText('SAFE', sz.x, sz.y + 4);
+    ctx.restore();
+  }
+
+  // ── Attack warning shapes ──────────────────────────────────
+  for (const w of bossWarnings) {
+    const prog  = w.timer / w.maxTimer;          // 1 → 0 as attack approaches
+    const blink = Math.floor(w.timer / 4) % 2;  // fast blink when almost expired
+    const alpha = (prog > 0.25 ? 0.25 + (1 - prog) * 0.35 : 0.55 + (blink ? 0.3 : 0)) * (prog < 0.15 ? prog / 0.15 : 1);
+
+    ctx.save();
+    ctx.globalAlpha = Math.min(0.85, Math.max(0.05, alpha));
+
+    if (w.type === 'circle') {
+      // Filled danger zone
+      const hex = w.safeZone ? '#00ff88' : w.color;
+      ctx.fillStyle   = hex + '33';
+      ctx.strokeStyle = hex;
+      ctx.lineWidth   = 2;
+      ctx.shadowColor = hex;
+      ctx.shadowBlur  = 12;
+      ctx.beginPath(); ctx.arc(w.x, w.y, w.r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    } else if (w.type === 'cross') {
+      // X marker at target location
+      ctx.strokeStyle = w.color;
+      ctx.lineWidth   = 3;
+      ctx.shadowColor = w.color;
+      ctx.shadowBlur  = 8;
+      const s = w.r;
+      ctx.beginPath();
+      ctx.moveTo(w.x - s, w.y - s); ctx.lineTo(w.x + s, w.y + s);
+      ctx.moveTo(w.x + s, w.y - s); ctx.lineTo(w.x - s, w.y + s);
+      ctx.stroke();
+    } else if (w.type === 'spike_warn') {
+      // Glowing dot on floor before spike rises
+      ctx.fillStyle   = w.color;
+      ctx.shadowColor = w.color;
+      ctx.shadowBlur  = 14;
+      ctx.beginPath(); ctx.arc(w.x, w.y, w.r * (1 - prog * 0.5), 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Label text
+    if (w.label && prog < 0.7) {
+      ctx.globalAlpha = Math.min(0.9, (0.7 - prog) / 0.7 * 0.9);
+      ctx.fillStyle   = w.color;
+      ctx.shadowColor = w.color;
+      ctx.shadowBlur  = 6;
+      ctx.font        = 'bold 12px monospace';
+      ctx.textAlign   = 'center';
+      ctx.fillText(w.label, w.x, w.y - w.r - 6);
+    }
+
+    ctx.restore();
+  }
+
+  ctx.restore();
+}
+
+function resetBossWarnings() {
+  bossWarnings        = [];
+  bossMetSafeZones    = [];
+  bossStaggerTimer    = 0;
+  bossStaggerDmg      = 0;
+  bossStaggerDecay    = 0;
+  bossDesperationMode  = false;
+  bossDesperationFlash = 0;
+  if (activeCinematic) endCinematic();
+  slowMotion           = 1.0;
+  cinematicCamOverride = false;
+  cinGroundCracks      = [];
+  cinScreenFlash       = null;
+}
+
 function resetTFState() {
   tfGravityInverted  = false;
   tfGravityTimer     = 0;
@@ -2196,6 +3077,8 @@ function resetTFState() {
   tfChainSlam        = null;
   tfGraspSlam        = null;
   tfShockwaves       = [];
+  // Reset telegraph / warning system
+  resetBossWarnings();
   // Restore void arena floor
   if (ARENAS.void) {
     const floorPl = ARENAS.void.platforms.find(p => p.isFloor);
